@@ -33,7 +33,7 @@ export default function Sidebar({
     }
   };
 
-  // Postgres-style stats calculations
+  // Local DB style stats calculations
   const totalRows = tables.reduce((acc, t) => acc + (t.rows?.length || 0), 0);
   const totalColumns = tables.reduce((acc, t) => acc + (t.columns?.length || 0), 0);
 
@@ -56,7 +56,7 @@ export default function Sidebar({
             <Database className="w-5 h-5 text-indigo-500" />
           </div>
           <div>
-            <h1 className="font-sans font-bold text-zinc-100 text-sm tracking-tight">Postgres Studio</h1>
+            <h1 className="font-sans font-bold text-zinc-100 text-sm tracking-tight">Schema Studio</h1>
             <span className="font-mono text-[10px] text-zinc-500 uppercase tracking-wider block">Relational Schema</span>
           </div>
         </div>
@@ -225,7 +225,7 @@ export default function Sidebar({
       <div className="p-4 border-t border-zinc-900 bg-zinc-950/80" id="sidebar-meta-card">
         <div className="p-3.5 bg-zinc-900 border border-zinc-800/80 rounded-xl space-y-2.5 shadow-sm">
           <h4 className="font-mono text-[9px] uppercase font-bold tracking-widest text-zinc-400 flex items-center gap-1">
-            <Terminal className="w-3 h-3 text-indigo-400" /> PostgreSQL Node Stats
+            <Terminal className="w-3 h-3 text-indigo-400" /> Relational Node Stats
           </h4>
           <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-zinc-500">
             <div>

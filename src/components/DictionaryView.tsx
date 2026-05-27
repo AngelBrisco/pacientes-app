@@ -22,8 +22,8 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
     return `${Math.round((nonNullCount / table.rows.length) * 100)}%`;
   };
 
-  // Maps physical Postgres type counterparts
-  const getPostgresTypeHint = (col: Column) => {
+  // Maps physical SQL/DB type counterparts
+  const getSqlTypeHint = (col: Column) => {
     switch (col.type) {
       case "number":
         return "NUMERIC(12, 2)";
@@ -49,7 +49,7 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
         <div className="space-y-1">
           <h3 className="font-sans font-bold text-xs text-zinc-150 uppercase tracking-wider">Diccionario de Datos y Esquema Relacional</h3>
           <p className="text-xs text-zinc-400 font-sans leading-relaxed">
-            Consulte la estructura interna, las restricciones ddl, los tipos físicos mapeados a PostgreSQL y realice inspecciones de tuplas en tiempo real.
+            Consulte la estructura interna, las restricciones ddl, los tipos físicos mapeados a SQL y realice inspecciones de tuplas en tiempo real.
           </p>
         </div>
       </div>
@@ -86,9 +86,9 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
                         <span className="font-sans font-bold text-xs text-zinc-200 truncate">{col.name}</span>
                       </div>
                       
-                      {/* Postgres DDL commands */}
+                      {/* SQL/DDL commands */}
                       <code className="block font-mono text-[10.5px] text-indigo-300 font-semibold bg-zinc-950 px-2 py-1 rounded border border-zinc-900 overflow-x-auto">
-                        {isPrimaryKey ? `${col.id} VARCHAR(32) PRIMARY KEY` : `${col.id} ${getPostgresTypeHint(col)}`}
+                        {isPrimaryKey ? `${col.id} VARCHAR(32) PRIMARY KEY` : `${col.id} ${getSqlTypeHint(col)}`}
                       </code>
                     </div>
 
@@ -165,7 +165,7 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
 
                 {/* Simulated PSQL raw JSON print */}
                 <div className="space-y-1.5 font-mono">
-                  <span className="text-[10px] uppercase font-mono text-zinc-500 font-bold block">Terminal PostgreSQL RAW Output:</span>
+                  <span className="text-[10px] uppercase font-mono text-zinc-500 font-bold block">Terminal SQL RAW Output:</span>
                   <pre className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl text-indigo-400 text-xs overflow-x-auto leading-relaxed max-h-72">
                     {JSON.stringify(activeRow, null, 2)}
                   </pre>

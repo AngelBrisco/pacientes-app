@@ -13,7 +13,11 @@ import {
   Calendar,
   X,
   PlusCircle,
-  Grid
+  Grid,
+  Paperclip,
+  Upload,
+  Download,
+  FileSpreadsheet
 } from "lucide-react";
 
 interface TableViewProps {
@@ -21,6 +25,7 @@ interface TableViewProps {
   onAddColumn: (name: string, type: ColumnType, options?: string[]) => void;
   onDeleteColumn: (columnId: string) => void;
   onAddRow: (rowData: Record<string, any>) => void;
+  onBulkAddRows?: (rowsData: Record<string, any>[]) => Promise<void>;
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   onDeleteRow: (rowId: string) => void;
   readOnly?: boolean;
@@ -31,6 +36,7 @@ export default function TableView({
   onAddColumn,
   onDeleteColumn,
   onAddRow,
+  onBulkAddRows,
   onUpdateRow,
   onDeleteRow,
   readOnly = false,
@@ -49,6 +55,12 @@ export default function TableView({
   const [showRowModal, setShowRowModal] = useState(false);
   const [editingRow, setEditingRow] = useState<Row | null>(null); // null = is creating new row
   const [currentRowData, setCurrentRowData] = useState<Record<string, any>>({});
+  
+  // File uploading status state and session details
+  const [isUploading, setIsUploading] = useState<Record<string, boolean>>({});
+  const sessionStr = localStorage.getItem("nococlone_session");
+  const sessionUser = sessionStr ? JSON.parse(sessionStr) : null;
+  const currentUserUsername = sessionUser ? sessionUser.username : "";
 
   // Sorting columns logic
   const handleSort = (colId: string) => {
@@ -135,6 +147,170 @@ export default function TableView({
     setEditingRow(null);
   };
 
+  // EXPORTAR COHORTES A FORMATO CSV (RFC 4180)
+  const handleExportCSV = () => {
+    try {
+      if (!table.columns || table.columns.length === 0) {
+        alert("No hay columnas configuradas para exportar.");
+        return;
+      }
+
+      // Headers (Names)
+      const headers = table.columns.map(col => `"${col.name.replace(/"/g, '""')}"`);
+      
+      // Rows encoding
+      const rows = table.rows.map(row => {
+        return table.columns.map(col => {
+          const val = row[col.id];
+          if (val === undefined || val === null) {
+            return '""';
+          }
+          let str = "";
+          if (typeof val === "object") {
+            str = JSON.stringify(val);
+          } else {
+            str = String(val);
+          }
+          return `"${str.replace(/"/g, '""')}"`;
+        }).join(",");
+      });
+
+      // Join and prepend UTF-8 Byte Order Mark (BOM) for Excel compatibility
+      const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${table.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}_datos.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Ocurrió un error al exportar la tabla activa: ${err.message}`);
+    }
+  };
+
+  // IMPORTAR REGISTROS DESDE CSV CON PARSE COMPACTO
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert("El archivo seleccionado está vacío.");
+          return;
+        }
+
+        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+        if (lines.length === 0) {
+          alert("No se encontraron registros de datos.");
+          return;
+        }
+
+        // CSV robust quote parsing scanner helper
+        const parseCSVLine = (lineText: string): string[] => {
+          const result: string[] = [];
+          let insideQuote = false;
+          let entry = "";
+          for (let i = 0; i < lineText.length; i++) {
+            const char = lineText[i];
+            if (char === '"') {
+              if (insideQuote && lineText[i + 1] === '"') {
+                entry += '"';
+                i++; // skip escaped quote sibling
+              } else {
+                insideQuote = !insideQuote;
+              }
+            } else if (char === ',' && !insideQuote) {
+              result.push(entry.trim());
+              entry = "";
+            } else {
+              entry += char;
+            }
+          }
+          result.push(entry.trim());
+          return result;
+        };
+
+        // Header parsing & alignment
+        const originalHeaders = parseCSVLine(lines[0]);
+        const colMap: Record<number, string> = {}; // index -> column ID
+        
+        originalHeaders.forEach((rawHeader, idx) => {
+          const cleanHeader = rawHeader.replace(/^\uFEFF/, "").trim().toLowerCase(); // Clean UTF-8 BOM
+          // Match against column names or IDs
+          const matchedCol = table.columns.find(col => 
+            col.id.toLowerCase() === cleanHeader || 
+            col.name.toLowerCase() === cleanHeader
+          );
+          if (matchedCol) {
+            colMap[idx] = matchedCol.id;
+          }
+        });
+
+        if (Object.keys(colMap).length === 0) {
+          alert("Fallo de mapeo: Ninguno de los encabezados del archivo CSV coincide con las columnas actuales.");
+          return;
+        }
+
+        // Row parsing & serialization
+        const importedData: Record<string, any>[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cellValues = parseCSVLine(lines[i]);
+          if (cellValues.length === 0 || (cellValues.length === 1 && cellValues[0] === "")) {
+            continue;
+          }
+
+          const parsedRow: Record<string, any> = {};
+          table.columns.forEach(col => {
+            // default fallback matches types
+            if (col.type === "boolean") parsedRow[col.id] = false;
+            else if (col.type === "number") parsedRow[col.id] = 0;
+            else parsedRow[col.id] = "";
+          });
+
+          cellValues.forEach((cellVal, idx) => {
+            const colId = colMap[idx];
+            if (colId) {
+              parsedRow[colId] = cellVal;
+            }
+          });
+
+          importedData.push(parsedRow);
+        }
+
+        if (importedData.length === 0) {
+          alert("No se pudieron parsear registros de datos válidos.");
+          return;
+        }
+
+        if (onBulkAddRows) {
+          await onBulkAddRows(importedData);
+          alert(`¡Éxito! Se han importado correctamente ${importedData.length} registros en la tabla.`);
+        } else {
+          // Fallback call single insertions
+          for (const rowObj of importedData) {
+            onAddRow(rowObj);
+          }
+          alert(`¡Éxito! Se cargaron ${importedData.length} registros en la grilla.`);
+        }
+
+        // Reset input so importing the same file triggers change again
+        e.target.value = "";
+      } catch (err: any) {
+        console.error(err);
+        alert(`Ocurrió un error al procesar el archivo CSV: ${err.message}`);
+      }
+    };
+
+    reader.readAsText(file, "UTF-8");
+  };
+
   return (
     <div id="table-view-module" className="flex flex-col flex-1 min-w-0 bg-transparent space-y-4">
       
@@ -157,8 +333,39 @@ export default function TableView({
 
         {/* Create column & user trigger controls */}
         <div className="flex items-center gap-2">
+          {/* Exportar CSV (Disponible para todo nivel de accesos) */}
+          <button
+            type="button"
+            id="btn-export-csv"
+            onClick={handleExportCSV}
+            className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-indigo-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
+            title="Exportar datos activos de la tabla a CSV"
+          >
+            <Download className="w-4 h-4 shrink-0 text-indigo-400" />
+            <span className="hidden sm:inline">Exportar CSV</span>
+          </button>
+
           {!readOnly && (
             <>
+              {/* Importar CSV con selector nativo oculto */}
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleImportCSV}
+                  className="hidden"
+                  id="csv-file-importer-input"
+                />
+                <label
+                  htmlFor="csv-file-importer-input"
+                  className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-emerald-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
+                  title="Importar registros desde un archivo CSV"
+                >
+                  <FileSpreadsheet className="w-4 h-4 shrink-0 text-emerald-500" />
+                  <span className="hidden sm:inline">Importar CSV</span>
+                </label>
+              </div>
+
               {/* Add Column Button */}
               <button
                 id="btn-toggle-add-column"
@@ -188,7 +395,7 @@ export default function TableView({
         <form onSubmit={handleCreateColumn} className="bg-zinc-900/60 border border-zinc-800 p-4 rounded-xl space-y-3.5 max-w-md animate-in slide-in-from-top-2" id="add-col-panel-form">
           <div className="flex items-center justify-between border-b border-zinc-800/60 pb-2">
             <h3 className="font-semibold text-zinc-200 text-xs uppercase font-mono flex items-center gap-1.5">
-              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" /> Nueva columna física (Postgres Style)
+              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" /> Nueva columna física (SQL Style)
             </h3>
             <button
               type="button"
@@ -226,6 +433,7 @@ export default function TableView({
                 <option value="select">ENUM (Opción Select)</option>
                 <option value="boolean">BOOLEAN (Verdadero/Falso)</option>
                 <option value="date">DATE (Fecha)</option>
+                <option value="file">FILE (Adjuntos / Imagen / PDF)</option>
               </select>
             </div>
           </div>
@@ -361,6 +569,39 @@ export default function TableView({
                             ) : (
                               <span className="text-zinc-600 font-mono">-</span>
                             )
+                          ) : col.type === "file" ? (
+                            (() => {
+                              const filesArr: string[] = Array.isArray(value) 
+                                ? value 
+                                : value && typeof value === "string" && value.startsWith("[") 
+                                  ? JSON.parse(value) 
+                                  : value ? [String(value)] : [];
+                              if (filesArr.length === 0) {
+                                return <span className="text-zinc-655 italic font-mono text-[10.5px]">- (sin adjuntos)</span>;
+                              }
+                              return (
+                                <div className="flex items-center gap-1.5 flex-wrap overflow-hidden max-w-full">
+                                  {filesArr.map((url, i) => {
+                                    const filename = url.split("/").pop() || "archivo";
+                                    const cleanName = filename.replace(/^\d+_/g, "");
+                                    return (
+                                      <a
+                                        key={i}
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="inline-flex items-center gap-1.5 font-sans font-semibold text-[10.5px] bg-[#6366f1]/10 border border-[#6366f1]/20 text-[#818cf8] hover:text-[#a5b4fc] px-2 py-0.5 rounded-full transition-all"
+                                        title={`Ver ${cleanName}`}
+                                      >
+                                        <Paperclip className="w-2.5 h-2.5 shrink-0" />
+                                        <span className="truncate max-w-[130px]">{cleanName}</span>
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()
                           ) : (
                             String(value || "")
                           )}
@@ -415,7 +656,7 @@ export default function TableView({
               <div className="flex items-center gap-2">
                 <Grid className="w-5 h-5 text-emerald-400" />
                 <h3 className="font-sans font-bold text-zinc-200 text-sm">
-                  {editingRow ? "Editar Registro Físico (UPDATE)" : "Insertar Fila en Postgres (INSERT INTO)"}
+                  {editingRow ? "Editar Registro Físico (UPDATE)" : "Insertar Fila en la DB (INSERT INTO)"}
                 </h3>
               </div>
               <button
@@ -500,6 +741,124 @@ export default function TableView({
                         }
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 font-mono disabled:opacity-55"
                       />
+                    ) : col.type === "file" ? (
+                      (() => {
+                        const filesArr: string[] = Array.isArray(value) 
+                          ? value 
+                          : value && typeof value === "string" && value.startsWith("[") 
+                            ? JSON.parse(value) 
+                            : value ? [String(value)] : [];
+                        return (
+                          <div className="space-y-2">
+                            {/* List existing files */}
+                            {filesArr.length > 0 && (
+                              <div className="flex flex-col gap-1.5 p-2 bg-zinc-950 rounded-lg border border-zinc-900">
+                                {filesArr.map((url, i) => {
+                                  const filename = url.split("/").pop() || "archivo";
+                                  const cleanName = filename.replace(/^\d+_/g, "");
+                                  return (
+                                    <div key={i} className="flex items-center justify-between text-xs bg-zinc-900 border border-zinc-800 px-2.5 py-1 rounded-lg">
+                                      <a
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-semibold font-sans truncate"
+                                        title="Ver archivo"
+                                      >
+                                        <Paperclip className="w-3.5 h-3.5 shrink-0 text-zinc-500" />
+                                        <span className="truncate max-w-[180px]">{cleanName}</span>
+                                      </a>
+                                      {!readOnly && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const nextArr = filesArr.filter((_, idx) => idx !== i);
+                                            setCurrentRowData({ ...currentRowData, [col.id]: nextArr });
+                                          }}
+                                          className="text-zinc-550 hover:text-rose-400 p-0.5 rounded transition-all cursor-pointer"
+                                          title="Eliminar archivo"
+                                        >
+                                          <X className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* Upload Drop Zone / Button */}
+                            {!readOnly && (
+                              <div className="relative">
+                                <input
+                                  type="file"
+                                  multiple
+                                  disabled={isUploading[col.id]}
+                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                  onChange={async (e) => {
+                                    const selectedFiles = e.target.files;
+                                    if (!selectedFiles || selectedFiles.length === 0) return;
+
+                                    setIsUploading(prev => ({ ...prev, [col.id]: true }));
+                                    try {
+                                      const filesToUpload: any[] = [];
+                                      for (let i = 0; i < selectedFiles.length; i++) {
+                                        const file = selectedFiles[i];
+                                        const base64 = await new Promise<string>((resolve, reject) => {
+                                          const reader = new FileReader();
+                                          reader.onload = () => resolve(reader.result as string);
+                                          reader.onerror = reject;
+                                          reader.readAsDataURL(file);
+                                        });
+                                        filesToUpload.push({ name: file.name, base64 });
+                                      }
+
+                                      const res = await fetch("/api/upload", {
+                                        method: "POST",
+                                        headers: {
+                                          "Content-Type": "application/json",
+                                          "x-user-username": currentUserUsername
+                                        },
+                                        body: JSON.stringify({ files: filesToUpload })
+                                      });
+
+                                      if (!res.ok) {
+                                        const errData = await res.json().catch(() => ({}));
+                                        throw new Error(errData.error || "Error de subida.");
+                                      }
+
+                                      const { urls } = await res.json();
+                                      setCurrentRowData({
+                                        ...currentRowData,
+                                        [col.id]: [...filesArr, ...urls]
+                                      });
+                                    } catch (err: any) {
+                                      console.error(err);
+                                      alert(`Fallo al subir archivos: ${err.message}`);
+                                    } finally {
+                                      setIsUploading(prev => ({ ...prev, [col.id]: false }));
+                                    }
+                                  }}
+                                />
+                                <div className="border border-dashed border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40 rounded-xl p-3 text-center transition-all flex flex-col items-center justify-center gap-1 select-none">
+                                  {isUploading[col.id] ? (
+                                    <div className="flex items-center gap-2 text-indigo-400 font-mono text-[11px] font-bold animate-pulse">
+                                      <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
+                                      <span>Cargando adjuntos...</span>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <Upload className="w-4 h-4 text-indigo-400" />
+                                      <span className="text-[11px] text-zinc-300 font-medium font-sans">Subir o arrastrar Archivos/PDFs</span>
+                                      <span className="text-[9.5px] text-zinc-500 font-mono font-bold">Multiselección compatible</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()
                     ) : (
                       <input
                         type="text"

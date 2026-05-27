@@ -1,4 +1,4 @@
-export type ColumnType = 'text' | 'number' | 'select' | 'boolean' | 'date';
+export type ColumnType = 'text' | 'number' | 'select' | 'boolean' | 'date' | 'file';
 
 export interface Column {
   id: string;
@@ -36,6 +36,7 @@ export interface UserAccount {
   password?: string; // Optative: keep it simple for local verification
   role: 'admin' | 'user';
   permissions: 'read-write' | 'read-only';
+  allowedTables?: string[]; // Table IDs the user is permitted to view. Empty or empty list with "*" means all tables.
 }
 
 export interface DbState {

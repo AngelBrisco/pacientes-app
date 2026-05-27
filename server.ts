@@ -110,7 +110,7 @@ function getInitialDbState(): DbState {
         action: "SCHEMA_CHANGE",
         tableId: "*",
         tableName: "Base de Datos",
-        details: "Creación inicial de tablas y esquemas de prueba (estilo relacional Postgres)."
+        details: "Creación inicial de tablas y esquemas de prueba (estilo relacional SQL/Local DB)."
       }
     ],
     users: [
@@ -196,7 +196,13 @@ function saveDb(state: DbState) {
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "50mb" }));
+
+  const uploadsDir = path.join(process.cwd(), "data", "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsDir));
 
   // Funciones auxiliares para control de accesos por roles y permisos
   function verifyWriteAccess(req: express.Request, db: DbState): { allowed: boolean; user?: any; error?: string } {
@@ -229,6 +235,20 @@ async function startServer() {
     return { allowed: true, user };
   }
 
+  function verifyTableAccess(req: express.Request, db: DbState, tableId: string): boolean {
+    const username = (req.headers["x-user-username"] as string) || "";
+    if (!username) return false;
+    const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
+    if (!user) return false;
+    // Admins always have access to all tables
+    if (user.role === "admin") return true;
+    // If unrestricted, they can access anything
+    if (!user.allowedTables || user.allowedTables.length === 0 || user.allowedTables.includes("*")) {
+      return true;
+    }
+    return user.allowedTables.includes(tableId);
+  }
+
   // API de Login
   app.post("/api/auth/login", (req, res) => {
     const { username, password } = req.body;
@@ -245,7 +265,8 @@ async function startServer() {
       username: user.username,
       name: user.name,
       role: user.role,
-      permissions: user.permissions
+      permissions: user.permissions,
+      allowedTables: user.allowedTables || []
     });
   });
 
@@ -268,7 +289,7 @@ async function startServer() {
       return res.status(403).json({ error: auth.error });
     }
 
-    const { username, name, password, role, permissions } = req.body;
+    const { username, name, password, role, permissions, allowedTables } = req.body;
     if (!username || !name || !password || !role || !permissions) {
       return res.status(400).json({ error: "Todos los campos de usuario son requeridos para el alta física." });
     }
@@ -285,7 +306,8 @@ async function startServer() {
       name: name.trim(),
       password: password,
       role: role,
-      permissions: permissions
+      permissions: permissions,
+      allowedTables: Array.isArray(allowedTables) ? allowedTables : []
     };
 
     if (!db.users) db.users = [];
@@ -319,7 +341,7 @@ async function startServer() {
     }
 
     const targetUser = db.users![userIdx];
-    const { name, password, role, permissions } = req.body;
+    const { name, password, role, permissions, allowedTables } = req.body;
 
     if (targetUser.username === "admin" && role !== "admin") {
       return res.status(400).json({ error: "No es posible degradar al administrador del sistema principal para no perder acceso." });
@@ -329,6 +351,7 @@ async function startServer() {
     if (password) targetUser.password = password;
     if (role) targetUser.role = role;
     if (permissions) targetUser.permissions = permissions;
+    if (allowedTables !== undefined) targetUser.allowedTables = Array.isArray(allowedTables) ? allowedTables : [];
 
     db.logs.push({
       id: "log_" + Date.now(),
@@ -382,7 +405,19 @@ async function startServer() {
 
   // Obtener estado actual de la DB
   app.get("/api/db", (req, res) => {
-    const db = loadDb();
+    let db = loadDb();
+    const username = (req.headers["x-user-username"] as string) || "";
+    if (username) {
+      const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
+      if (user && user.role !== "admin") {
+        if (user.allowedTables && user.allowedTables.length > 0 && !user.allowedTables.includes("*")) {
+          db = {
+            ...db,
+            tables: db.tables.filter(t => user.allowedTables!.includes(t.id))
+          };
+        }
+      }
+    }
     res.json(db);
   });
 
@@ -465,6 +500,10 @@ async function startServer() {
     const currentUser = auth.user.name;
     const { tableId } = req.params;
 
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
     const tableIdx = db.tables.findIndex(t => t.id === tableId);
     if (tableIdx === -1) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -497,6 +536,11 @@ async function startServer() {
 
     const currentUser = auth.user.name;
     const { tableId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
     const { name, type, options } = req.body;
 
     if (!name || !type) {
@@ -523,6 +567,7 @@ async function startServer() {
       let defaultValue: any = "";
       if (type === "boolean") defaultValue = false;
       if (type === "number") defaultValue = 0;
+      if (type === "file") defaultValue = []; // Initialize empty array of attachments
       return { ...row, [colId]: defaultValue };
     });
 
@@ -550,6 +595,10 @@ async function startServer() {
 
     const currentUser = auth.user.name;
     const { tableId, columnId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
 
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
@@ -585,6 +634,68 @@ async function startServer() {
     res.json(db);
   });
 
+  // API de Carga Masiva de Filas (Importación CSV)
+  app.post("/api/db/tables/:tableId/bulk-rows", (req, res) => {
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
+    const { tableId } = req.params;
+    const rowsData = req.body; // Array de registros
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    if (!Array.isArray(rowsData)) {
+      return res.status(400).json({ error: "Datos de carga masiva inválidos (esperaba Array)." });
+    }
+
+    let timestampIncr = Date.now();
+    const importedCount = rowsData.length;
+
+    rowsData.forEach(rowData => {
+      const rowId = "row_" + (timestampIncr++);
+      const cleanRow: Row = { id: rowId };
+
+      table.columns.forEach(col => {
+        let val = rowData[col.id];
+        if (col.type === "boolean") {
+          val = (val === true || String(val).toLowerCase() === "true" || String(val) === "1" || String(val).trim().toLowerCase() === "si" || String(val).trim().toLowerCase() === "verdadero");
+        } else if (col.type === "number") {
+          val = val !== undefined && val !== "" ? Number(val) : 0;
+          if (isNaN(val)) val = 0;
+        } else {
+          val = val !== undefined && val !== null ? String(val) : "";
+        }
+        cleanRow[col.id] = val;
+      });
+
+      table.rows.push(cleanRow);
+    });
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: currentUser,
+      action: "CREATE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Importación CSV exitosa: Cargó ${importedCount} registros de pacientes en '${table.name}'.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
   // Crear una nueva fila
   app.post("/api/db/tables/:tableId/rows", (req, res) => {
     const db = loadDb();
@@ -595,6 +706,11 @@ async function startServer() {
 
     const currentUser = auth.user.name;
     const { tableId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
     const rowData = req.body;
 
     const table = db.tables.find(t => t.id === tableId);
@@ -646,6 +762,11 @@ async function startServer() {
 
     const currentUser = auth.user.name;
     const { tableId, rowId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
     const newValues = req.body;
 
     const table = db.tables.find(t => t.id === tableId);
@@ -702,6 +823,10 @@ async function startServer() {
     const currentUser = auth.user.name;
     const { tableId, rowId } = req.params;
 
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -730,6 +855,49 @@ async function startServer() {
 
     saveDb(db);
     res.json(db);
+  });
+
+  // API de Subida de Archivos Corporativos (Imágenes y PDFs)
+  app.post("/api/upload", (req, res) => {
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { files } = req.body; // array of { name: string, base64: string }
+    if (!files || !Array.isArray(files)) {
+      return res.status(400).json({ error: "No se proporcionaron archivos válidos." });
+    }
+
+    try {
+      const urls: string[] = [];
+      const uploadsDir = path.join(process.cwd(), "data", "uploads");
+
+      for (const file of files) {
+        let { name, base64 } = file;
+        if (!name || !base64) continue;
+
+        // Strip data url prefix if exists: e.g. "data:image/png;base64,"
+        if (base64.indexOf(";base64,") !== -1) {
+          base64 = base64.split(";base64,").pop() || "";
+        }
+
+        const buffer = Buffer.from(base64, "base64");
+        // Clean special characters
+        const cleanName = name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+        const fileName = `${Date.now()}_${cleanName}`;
+        const filePath = path.join(uploadsDir, fileName);
+
+        fs.writeFileSync(filePath, buffer);
+        urls.push(`/uploads/${fileName}`);
+      }
+
+      res.json({ urls });
+    } catch (err: any) {
+      console.error("Error al procesar subida de archivo corporativo:", err);
+      res.status(500).json({ error: "Error interno al guardar los adjuntos." });
+    }
   });
 
   // Integración de Vite Middleware para Desarrollo

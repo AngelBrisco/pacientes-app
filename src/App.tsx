@@ -6,6 +6,7 @@ import UserManagementView from "./components/UserManagementView";
 import TableView from "./components/TableView";
 import KanbanView from "./components/KanbanView";
 import DictionaryView from "./components/DictionaryView";
+import CalendarView from "./components/CalendarView";
 import {
   Table,
   Kanban,
@@ -20,7 +21,8 @@ import {
   Users,
   LogOut,
   ShieldCheck,
-  Eye
+  Eye,
+  Calendar
 } from "lucide-react";
 
 export default function App() {
@@ -72,7 +74,7 @@ export default function App() {
       setError(null);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "No se pudo conectar con el motor local base de datos Postgres.");
+      setError(err.message || "No se pudo conectar con el motor local de base de datos.");
     } finally {
       setLoading(false);
     }
@@ -125,7 +127,7 @@ export default function App() {
       setError(null);
     } catch (err: any) {
       console.error(err);
-      alert(`Fallo en Postgres (SQL Execute Reject): ${err.message}`);
+      alert(`Fallo de Base de Datos (SQL Execute Reject): ${err.message}`);
     } finally {
       setIsSyncing(false);
     }
@@ -171,6 +173,12 @@ export default function App() {
     await apiAction(`/api/db/tables/${activeTableId}/rows/${rowId}`, "DELETE");
   };
 
+  // BULK INSERT ROWS (CSV IMPORT)
+  const handleBulkAddRows = async (rowsData: Record<string, any>[]) => {
+    if (!activeTableId) return;
+    await apiAction(`/api/db/tables/${activeTableId}/bulk-rows`, "POST", rowsData);
+  };
+
   // RESET TO DEFAULT FACTORY PRESETS
   const handleResetDb = async () => {
     if (confirm("¿Proceder con la restauración de fábrica? Esto volverá a construir los schemas iniciales 'Tareas de Ingeniería' y 'Cartera de Clientes' sobreescibiendo cambios actuales.")) {
@@ -188,7 +196,7 @@ export default function App() {
   return (
     <div id="app-root-container" className="flex h-screen w-full bg-[#09090b] text-zinc-100 overflow-hidden font-sans">
       
-      {/* Lateral Postgres schemas & audit trails control sidebar */}
+      {/* Lateral schemas & audit trails control sidebar */}
       <Sidebar
         tables={dbState?.tables || []}
         activeTableId={activeTableId}
@@ -212,7 +220,7 @@ export default function App() {
                 {activeView === "users" ? "control_de_usuarios" : activeTable ? activeTable.name : "Seleccione un Schema"}
               </h2>
               <span className="font-mono text-[9.5px] text-zinc-500 uppercase tracking-wider block truncate">
-                {activeView === "users" ? "SISTEMA DE PRIVILEGIOS POSTGRES" : activeTable ? `ID FISICO: ${activeTable.id}` : "Esquemas vacíos"}
+                {activeView === "users" ? "SISTEMA DE PRIVILEGIOS" : activeTable ? `ID FISICO: ${activeTable.id}` : "Esquemas vacíos"}
               </span>
             </div>
 
@@ -258,6 +266,19 @@ export default function App() {
                     <BookOpen className="w-3.5 h-3.5" />
                     <span>Diccionario (DDL)</span>
                   </button>
+
+                  <button
+                    id="tab-view-calendar"
+                    onClick={() => setActiveView("calendar")}
+                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      activeView === "calendar"
+                        ? "text-indigo-400 border-b-2 border-indigo-500"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Calendario</span>
+                  </button>
                 </>
               )}
 
@@ -296,7 +317,7 @@ export default function App() {
                   <span className="truncate max-w-[110px]" title={currentUser.name}>{currentUser.name}</span>
                 </span>
                 <span className="text-[9.5px] font-mono text-zinc-500 uppercase flex items-center gap-1 leading-none mt-0.5">
-                  {currentUser.role === "admin" ? "Administrador" : "Usuario"} • {currentUser.permissions === "read-write" ? "Escritura (Postgres)" : "Sólo Lectura"}
+                  {currentUser.role === "admin" ? "Administrador" : "Usuario"} • {currentUser.permissions === "read-write" ? "Escritura (SQL / LOCAL)" : "Sólo Lectura"}
                 </span>
               </div>
               <button
@@ -319,7 +340,7 @@ export default function App() {
           {currentUser.permissions === "read-only" && activeView !== "users" && (
             <div className="mb-4 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 flex gap-2.5 items-center text-amber-500 text-xs font-sans max-w-4xl mx-auto block" id="readonly-warning-banner">
               <Eye className="w-4 h-4 text-amber-500" />
-              <span><strong>Sesión Consulta (Solo Lectura):</strong> Tienes permisos restringidos de PostgreSQL. Puedes explorar tablas, Kanban y Diccionarios DDL pero tu rol no está auditado para ejecutar cambios WRITE u operaciones DML (INSERT, UPDATE, DELETE).</span>
+              <span><strong>Sesión Consulta (Solo Lectura):</strong> Tienes permisos restringidos de Base de Datos. Puedes explorar tablas, Kanban y Diccionarios DDL pero tu rol no está auditado para ejecutar cambios WRITE u operaciones DML (INSERT, UPDATE, DELETE).</span>
             </div>
           )}
 
@@ -327,7 +348,7 @@ export default function App() {
             <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-3 text-rose-400 max-w-xl mx-auto" id="error-card-display">
               <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <h4 className="font-sans font-bold text-xs uppercase">Error de Conexión Postgres</h4>
+                <h4 className="font-sans font-bold text-xs uppercase">Error de Conexión de Base de Datos</h4>
                 <p className="text-xs font-sans text-zinc-400 leading-relaxed">{error}</p>
                 <button
                   onClick={() => fetchDb()}
@@ -343,15 +364,15 @@ export default function App() {
             <div className="h-full flex flex-col items-center justify-center space-y-4" id="view-loading-panel">
               <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
               <p className="text-xs font-mono text-zinc-500 uppercase tracking-widest font-bold animate-pulse">
-                Estableciendo Conexión Física Postgres...
+                Estableciendo Conexión Física SQL...
               </p>
             </div>
           ) : activeView === "users" ? (
-            <UserManagementView currentUser={currentUser} />
+            <UserManagementView currentUser={currentUser} tables={dbState?.tables || []} />
           ) : !activeTable ? (
             <div className="h-full flex flex-col items-center justify-center max-w-md mx-auto text-center space-y-4" id="view-empty-schema-panel">
               <Server className="w-12 h-12 text-zinc-700" />
-              <h3 className="text-zinc-300 font-sans font-bold text-sm">No se cargó ningún Schema en Postgres</h3>
+              <h3 className="text-zinc-300 font-sans font-bold text-sm">No se cargó ningún Schema en la Base de Datos</h3>
               <p className="text-xs text-zinc-500 leading-relaxed font-sans">
                 Para comenzar a estructurar tu base de datos relacional style NocoDB, crea una nueva tabla desde el panel izquierdo o haz clic para restaurar presets.
               </p>
@@ -373,6 +394,7 @@ export default function App() {
                   onAddColumn={handleAddColumn}
                   onDeleteColumn={handleDeleteColumn}
                   onAddRow={handleAddRow}
+                  onBulkAddRows={handleBulkAddRows}
                   onUpdateRow={handleUpdateRow}
                   onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}
@@ -388,6 +410,8 @@ export default function App() {
               )}
 
               {activeView === "dictionary" && <DictionaryView table={activeTable} />}
+
+              {activeView === "calendar" && <CalendarView table={activeTable} />}
             </div>
           )}
         </div>
@@ -401,7 +425,7 @@ export default function App() {
             </span>
             <span className="text-zinc-700">|</span>
             <span className="flex items-center gap-1 font-mono">
-              <Clock className="w-3 h-3 text-zinc-650" /> Postgres Core Client Stable
+              <Clock className="w-3 h-3 text-zinc-650" /> SQL Core Client Stable
             </span>
           </div>
 

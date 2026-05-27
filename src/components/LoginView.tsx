@@ -41,7 +41,7 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
       onLoginSuccess(user);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "No se pudo autenticar en el servidor local Postgres.");
+      setError(err.message || "No se pudo autenticar en el servidor local de base de datos.");
     } finally {
       setLoading(false);
     }
@@ -58,10 +58,10 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
         
         {/* Brand Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex p-3 bg-indigo-600/15 border border-indigo-500/25 text-indigo-400 rounded-xl mb-1">
+          <div className="inline-flex p-3 bg-indigo-600/15 border border-indigo-505/25 text-indigo-400 rounded-xl mb-1">
             <Database className="w-7 h-7" />
           </div>
-          <h1 className="font-sans font-extrabold text-2xl text-zinc-100 tracking-tight">Postgres Studio</h1>
+          <h1 className="font-sans font-extrabold text-2xl text-zinc-100 tracking-tight">Schema Studio</h1>
           <p className="text-zinc-500 text-xs font-mono uppercase tracking-wider">Relational Schema Control Panel</p>
         </div>
 
