@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json tsconfig.json vite.config.ts index.html ./
 
 # Instalar todas las dependencias
-RUN npm ci
+RUN npm install
 
 # Copiar código fuente
 COPY src/ ./src/
@@ -28,7 +28,7 @@ ENV PORT=3000
 COPY package*.json ./
 
 # Instalar solo dependencias de producción (express, etc.)
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Copiar la aplicación compilada (React static en dist/ y backend express compilado en dist/server.cjs)
 COPY --from=builder /app/dist ./dist
