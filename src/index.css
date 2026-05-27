@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+body {
+  background-color: #09090b;
+  color: #fafafa;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Elegant Dark scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #18181b;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Custom visual signatures of the Elegant Dark design system */
+.glass-panel {
+  background: rgba(24, 24, 27, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(63, 63, 70, 0.5);
+}
+
+.active-tab {
+  border-bottom: 2px dashed #6366f1;
+  color: #818cf8;
+}
+
+.row-hover:hover {
+  background-color: rgba(39, 39, 42, 0.5);
+}
+

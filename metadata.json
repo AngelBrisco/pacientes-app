@@ -1,0 +1,6 @@
+{
+  "name": "NocoClone Database Studio",
+  "description": "A self-contained, Docker-ready tabular database manager with Table, Kanban, and Dictionary views, multi-user simulation, and audit logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

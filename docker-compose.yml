@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  nococlone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nococlone_app
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persiste el archivo de la base de datos (db.json) y el historial de cambios en tu máquina local.
+      # Se creará una carpeta llamada "nococlone_data" en el mismo directorio donde ejecutes docker-compose up.
+      - ./nococlone_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=tu_api_key_opcional
+    restart: unless-stopped
