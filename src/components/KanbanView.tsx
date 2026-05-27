@@ -5,9 +5,10 @@ import { MoveLeft, MoveRight, Layers, SlidersHorizontal, ArrowLeftRight, CreditC
 interface KanbanViewProps {
   table: TableSchema;
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
+  readOnly?: boolean;
 }
 
-export default function KanbanView({ table, onUpdateRow }: KanbanViewProps) {
+export default function KanbanView({ table, onUpdateRow, readOnly = false }: KanbanViewProps) {
   // Find selectable grouping columns (Columns of type 'select' or 'boolean')
   const groupableColumns = table.columns.filter(
     (col) => col.type === "select" || col.type === "boolean"
@@ -176,37 +177,39 @@ export default function KanbanView({ table, onUpdateRow }: KanbanViewProps) {
                         </div>
 
                         {/* Slide card actions */}
-                        <div className="flex items-center justify-between pt-1 border-t border-zinc-900 bg-transparent">
-                          {/* Move Left */}
-                          <button
-                            id={`btn-move-left-${row.id}`}
-                            disabled={laneIdx === 0}
-                            onClick={() => moveCard(row, laneIdx, "left")}
-                            className={`p-1.5 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition-all ${
-                              laneIdx === 0 ? "opacity-30 cursor-not-allowed" : "cursor-pointer"
-                            }`}
-                            title="Mover a columna izquierda"
-                          >
-                            <MoveLeft className="w-3.5 h-3.5" />
-                          </button>
+                        {!readOnly && (
+                          <div className="flex items-center justify-between pt-1 border-t border-zinc-900 bg-transparent">
+                            {/* Move Left */}
+                            <button
+                              id={`btn-move-left-${row.id}`}
+                              disabled={laneIdx === 0}
+                              onClick={() => moveCard(row, laneIdx, "left")}
+                              className={`p-1.5 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition-all ${
+                                laneIdx === 0 ? "opacity-30 cursor-not-allowed" : "cursor-pointer"
+                              }`}
+                              title="Mover a columna izquierda"
+                            >
+                              <MoveLeft className="w-3.5 h-3.5" />
+                            </button>
 
-                          <span className="font-mono text-[9px] text-zinc-600 font-semibold uppercase flex items-center gap-1">
-                            <ArrowLeftRight className="w-2.5 h-2.5" /> Transferir
-                          </span>
+                            <span className="font-mono text-[9px] text-zinc-600 font-semibold uppercase flex items-center gap-1">
+                              <ArrowLeftRight className="w-2.5 h-2.5" /> Transferir
+                            </span>
 
-                          {/* Move Right */}
-                          <button
-                            id={`btn-move-right-${row.id}`}
-                            disabled={laneIdx === lanes.length - 1}
-                            onClick={() => moveCard(row, laneIdx, "right")}
-                            className={`p-1.5 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition-all ${
-                              laneIdx === lanes.length - 1 ? "opacity-30 cursor-not-allowed" : "cursor-pointer"
-                            }`}
-                            title="Mover a columna derecha"
-                          >
-                            <MoveRight className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                            {/* Move Right */}
+                            <button
+                              id={`btn-move-right-${row.id}`}
+                              disabled={laneIdx === lanes.length - 1}
+                              onClick={() => moveCard(row, laneIdx, "right")}
+                              className={`p-1.5 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition-all ${
+                                laneIdx === lanes.length - 1 ? "opacity-30 cursor-not-allowed" : "cursor-pointer"
+                              }`}
+                              title="Mover a columna derecha"
+                            >
+                              <MoveRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })

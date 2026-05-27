@@ -9,6 +9,7 @@ interface SidebarProps {
   onCreateTable: (name: string) => void;
   onDeleteTable: (id: string) => void;
   logs: AuditLog[];
+  readOnly?: boolean;
 }
 
 export default function Sidebar({
@@ -18,6 +19,7 @@ export default function Sidebar({
   onCreateTable,
   onDeleteTable,
   logs = [],
+  readOnly = false,
 }: SidebarProps) {
   const [newTableName, setNewTableName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -69,13 +71,15 @@ export default function Sidebar({
             <span className="font-mono text-[10.5px] uppercase font-bold text-zinc-500 tracking-widest flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-indigo-400" /> Tablas (Schemas)
             </span>
-            <button
-              id="btn-toggle-add-table"
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900/60 transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            {!readOnly && (
+              <button
+                id="btn-toggle-add-table"
+                onClick={() => setShowAddForm(!showAddForm)}
+                className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900/60 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           {showAddForm && (
@@ -138,19 +142,21 @@ export default function Sidebar({
                       <span className="font-mono text-[9px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded" title="Cantidad de filas">
                         {table.rows?.length || 0}r
                       </span>
-                      <button
-                        id={`btn-delete-table-${table.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm(`¿Seguro que deseas eliminar la tabla '${table.name}'? Esto borrará todas sus columnas y registros permanentemente.`)) {
-                            onDeleteTable(table.id);
-                          }
-                        }}
-                        className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer"
-                        title="Borrar Tabla"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          id={`btn-delete-table-${table.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`¿Seguro que deseas eliminar la tabla '${table.name}'? Esto borrará todas sus columnas y registros permanentemente.`)) {
+                              onDeleteTable(table.id);
+                            }
+                          }}
+                          className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer"
+                          title="Borrar Tabla"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );

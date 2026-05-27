@@ -23,6 +23,7 @@ interface TableViewProps {
   onAddRow: (rowData: Record<string, any>) => void;
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   onDeleteRow: (rowId: string) => void;
+  readOnly?: boolean;
 }
 
 export default function TableView({
@@ -32,6 +33,7 @@ export default function TableView({
   onAddRow,
   onUpdateRow,
   onDeleteRow,
+  readOnly = false,
 }: TableViewProps) {
   // Search and Sort states
   const [searchTerm, setSearchTerm] = useState("");
@@ -155,25 +157,29 @@ export default function TableView({
 
         {/* Create column & user trigger controls */}
         <div className="flex items-center gap-2">
-          {/* Add Column Button */}
-          <button
-            id="btn-toggle-add-column"
-            onClick={() => setShowAddCol(!showAddCol)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-emerald-400 hover:bg-zinc-800/80 transition-all cursor-pointer shadow-xs"
-          >
-            <PlusCircle className="w-4.5 h-4.5 text-emerald-500" />
-            <span>Columna</span>
-          </button>
+          {!readOnly && (
+            <>
+              {/* Add Column Button */}
+              <button
+                id="btn-toggle-add-column"
+                onClick={() => setShowAddCol(!showAddCol)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-emerald-400 hover:bg-zinc-800/80 transition-all cursor-pointer shadow-xs"
+              >
+                <PlusCircle className="w-4.5 h-4.5 text-emerald-500" />
+                <span>Columna</span>
+              </button>
 
-          {/* Add Row Button */}
-          <button
-            id="btn-open-add-row-form"
-            onClick={() => handleOpenRowForm(null)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-md"
-          >
-            <Plus className="w-4.5 h-4.5" />
-            <span>Nueva Fila (INSERT)</span>
-          </button>
+              {/* Add Row Button */}
+              <button
+                id="btn-open-add-row-form"
+                onClick={() => handleOpenRowForm(null)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-md"
+              >
+                <Plus className="w-4.5 h-4.5" />
+                <span>Nueva Fila (INSERT)</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -280,7 +286,7 @@ export default function TableView({
                       </div>
                       
                       {/* Only allow deleting column if it is not the very first column (for index safety) */}
-                      {index > 0 && (
+                      {index > 0 && !readOnly && (
                         <button
                           id={`btn-col-del-${col.id}`}
                           onClick={() => {
@@ -362,29 +368,30 @@ export default function TableView({
                       );
                     })}
 
-                    {/* Actions button */}
                     <td className="px-4 py-3 text-center bg-zinc-900/10" id={`row-actions-td-${row.id}`}>
                       <div className="flex items-center justify-center gap-2">
                         <button
                           id={`btn-row-edit-${row.id}`}
                           onClick={() => handleOpenRowForm(row)}
                           className="p-1 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 cursor-pointer transition-all"
-                          title="Ficha / Editar Fila"
+                          title={readOnly ? "Ver Ficha de Registro" : "Ficha / Editar Fila"}
                         >
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button
-                          id={`btn-row-delete-${row.id}`}
-                          onClick={() => {
-                            if (confirm("¿Proceder a eliminar este registro físico? Esta operación restará 1 fila de la base de datos.")) {
-                              onDeleteRow(row.id);
-                            }
-                          }}
-                          className="p-1 rounded-md text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer transition-all"
-                          title="DELETE FROM (Eliminar Fila)"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {!readOnly && (
+                          <button
+                            id={`btn-row-delete-${row.id}`}
+                            onClick={() => {
+                              if (confirm("¿Proceder a eliminar este registro físico? Esta operación restará 1 fila de la base de datos.")) {
+                                onDeleteRow(row.id);
+                              }
+                            }}
+                            className="p-1 rounded-md text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer transition-all"
+                            title="DELETE FROM (Eliminar Fila)"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -441,6 +448,7 @@ export default function TableView({
                           <input
                             type="checkbox"
                             checked={!!value}
+                            disabled={readOnly}
                             onChange={(e) =>
                               setCurrentRowData({ ...currentRowData, [col.id]: e.target.checked })
                             }
@@ -455,10 +463,11 @@ export default function TableView({
                     ) : col.type === "select" ? (
                       <select
                         value={value || ""}
+                        disabled={readOnly}
                         onChange={(e) =>
                           setCurrentRowData({ ...currentRowData, [col.id]: e.target.value })
                         }
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed"
                       >
                         <option value="">-- Seleccionar opción --</option>
                         {col.options?.map((opt) => (
@@ -471,6 +480,7 @@ export default function TableView({
                       <input
                         type="number"
                         step="any"
+                        disabled={readOnly}
                         value={value !== undefined ? value : 0}
                         onChange={(e) =>
                           setCurrentRowData({
@@ -478,25 +488,27 @@ export default function TableView({
                             [col.id]: e.target.value === "" ? "" : Number(e.target.value)
                           })
                         }
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 font-mono disabled:opacity-55"
                       />
                     ) : col.type === "date" ? (
                       <input
                         type="date"
+                        disabled={readOnly}
                         value={value || ""}
                         onChange={(e) =>
                           setCurrentRowData({ ...currentRowData, [col.id]: e.target.value })
                         }
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 font-mono disabled:opacity-55"
                       />
                     ) : (
                       <input
                         type="text"
+                        disabled={readOnly}
                         value={value || ""}
                         onChange={(e) =>
                           setCurrentRowData({ ...currentRowData, [col.id]: e.target.value })
                         }
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg text-sm p-2.5 text-zinc-200 outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-55"
                       />
                     )}
                   </div>
@@ -505,21 +517,30 @@ export default function TableView({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-zinc-900 border-t border-zinc-800 flex justify-end gap-2.5 rounded-b-2xl">
+            <div className="p-4 bg-zinc-900 border-t border-zinc-800 flex justify-end gap-2.5 rounded-b-2xl items-center">
+              {readOnly && (
+                <span className="text-[10px] uppercase font-mono font-bold text-amber-500 animate-pulse bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-md">
+                  SOLO LECTURA
+                </span>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowRowModal(false)}
                 className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 rounded-lg text-xs font-semibold cursor-pointer"
               >
-                Cancelar
+                Cerrar
               </button>
-              <button
-                type="submit"
-                className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-bold rounded-lg text-xs cursor-pointer shadow-md"
-                id="btn-modal-save-row"
-              >
-                {editingRow ? "Confirmar UPDATE" : "Ejecutar INSERT"}
-              </button>
+              
+              {!readOnly && (
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-bold rounded-lg text-xs cursor-pointer shadow-md"
+                  id="btn-modal-save-row"
+                >
+                  {editingRow ? "Confirmar UPDATE" : "Ejecutar INSERT"}
+                </button>
+              )}
             </div>
           </form>
         </div>

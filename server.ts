@@ -112,6 +112,32 @@ function getInitialDbState(): DbState {
         tableName: "Base de Datos",
         details: "Creación inicial de tablas y esquemas de prueba (estilo relacional Postgres)."
       }
+    ],
+    users: [
+      {
+        id: "usr_admin",
+        username: "admin",
+        name: "Administrador del Sistema",
+        password: "admin123",
+        role: "admin",
+        permissions: "read-write"
+      },
+      {
+        id: "usr_angel",
+        username: "angel",
+        name: "Ángel Brisco",
+        password: "angel123",
+        role: "user",
+        permissions: "read-write"
+      },
+      {
+        id: "usr_qa",
+        username: "qa",
+        name: "QA Auditor",
+        password: "qa123",
+        role: "user",
+        permissions: "read-only"
+      }
     ]
   };
 }
@@ -120,7 +146,37 @@ function loadDb(): DbState {
   try {
     if (fs.existsSync(DB_FILE_PATH)) {
       const data = fs.readFileSync(DB_FILE_PATH, "utf-8");
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (!parsed.users) {
+        parsed.users = [
+          {
+            id: "usr_admin",
+            username: "admin",
+            name: "Administrador del Sistema",
+            password: "admin123",
+            role: "admin",
+            permissions: "read-write"
+          },
+          {
+            id: "usr_angel",
+            username: "angel",
+            name: "Ángel Brisco",
+            password: "angel123",
+            role: "user",
+            permissions: "read-write"
+          },
+          {
+            id: "usr_qa",
+            username: "qa",
+            name: "QA Auditor",
+            password: "qa123",
+            role: "user",
+            permissions: "read-only"
+          }
+        ];
+        saveDb(parsed);
+      }
+      return parsed;
     }
   } catch (error) {
     console.error("Error fatal cargando base de datos, reiniciando:", error);
@@ -142,6 +198,186 @@ async function startServer() {
   const app = express();
   app.use(express.json());
 
+  // Funciones auxiliares para control de accesos por roles y permisos
+  function verifyWriteAccess(req: express.Request, db: DbState): { allowed: boolean; user?: any; error?: string } {
+    const username = (req.headers["x-user-username"] as string) || "";
+    if (!username) {
+      return { allowed: false, error: "Identificación de sesión ausente (Cargue x-user-username en las cabeceras)." };
+    }
+    const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
+    if (!user) {
+      return { allowed: false, error: `Sesión inválida: El usuario '${username}' no está registrado en el sistema.` };
+    }
+    if (user.permissions === "read-only") {
+      return { allowed: false, user, error: `Permiso Denegado: Tu perfil '${user.name}' tiene nivel de SÓLO LECTURA.` };
+    }
+    return { allowed: true, user };
+  }
+
+  function verifyAdminAccess(req: express.Request, db: DbState): { allowed: boolean; user?: any; error?: string } {
+    const username = (req.headers["x-user-username"] as string) || "";
+    if (!username) {
+      return { allowed: false, error: "Identificación de sesión ausente." };
+    }
+    const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
+    if (!user) {
+      return { allowed: false, error: "Sesión inválida o expirada." };
+    }
+    if (user.role !== "admin") {
+      return { allowed: false, user, error: "Permiso Denegado: Se requieren privilegios de Administrador para gestionar usuarios." };
+    }
+    return { allowed: true, user };
+  }
+
+  // API de Login
+  app.post("/api/auth/login", (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "El nombre de usuario y contraseña son estrictamente necesarios." });
+    }
+    const db = loadDb();
+    const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim() && u.password === password);
+    if (!user) {
+      return res.status(401).json({ error: "Credenciales inválidas. Por favor, intente nuevamente." });
+    }
+    res.json({
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      permissions: user.permissions
+    });
+  });
+
+  // APIs para la administración de usuarios (Solo administrador)
+  app.get("/api/users", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+    // Retornamos los usuarios desnudando los passwords por seguridad si es necesario,
+    // o incluyéndolos para que el admin pueda verlos y editarlos cómodamente.
+    res.json(db.users || []);
+  });
+
+  app.post("/api/users", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { username, name, password, role, permissions } = req.body;
+    if (!username || !name || !password || !role || !permissions) {
+      return res.status(400).json({ error: "Todos los campos de usuario son requeridos para el alta física." });
+    }
+
+    const trimmedUsername = username.trim().toLowerCase();
+    const exists = db.users?.some(u => u.username.toLowerCase() === trimmedUsername);
+    if (exists) {
+      return res.status(400).json({ error: `El nombre de usuario '${username}' ya está ocupado.` });
+    }
+
+    const newUser = {
+      id: "usr_" + Date.now(),
+      username: trimmedUsername,
+      name: name.trim(),
+      password: password,
+      role: role,
+      permissions: permissions
+    };
+
+    if (!db.users) db.users = [];
+    db.users.push(newUser);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "users",
+      tableName: "Control de Accesos",
+      details: `Creó la cuenta de usuario '${newUser.name}' con rol '${newUser.role}' y permisos de '${newUser.permissions}'.`
+    });
+
+    saveDb(db);
+    res.json(db.users);
+  });
+
+  app.put("/api/users/:userId", (req, res) => {
+    const { userId } = req.params;
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const userIdx = db.users?.findIndex(u => u.id === userId);
+    if (userIdx === undefined || userIdx === -1) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    const targetUser = db.users![userIdx];
+    const { name, password, role, permissions } = req.body;
+
+    if (targetUser.username === "admin" && role !== "admin") {
+      return res.status(400).json({ error: "No es posible degradar al administrador del sistema principal para no perder acceso." });
+    }
+
+    if (name) targetUser.name = name.trim();
+    if (password) targetUser.password = password;
+    if (role) targetUser.role = role;
+    if (permissions) targetUser.permissions = permissions;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "users",
+      tableName: "Control de Accesos",
+      details: `Modificó las credenciales/permisos de la cuenta de usuario '${targetUser.name}'.`
+    });
+
+    saveDb(db);
+    res.json(db.users);
+  });
+
+  app.delete("/api/users/:userId", (req, res) => {
+    const { userId } = req.params;
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const userIdx = db.users?.findIndex(u => u.id === userId);
+    if (userIdx === undefined || userIdx === -1) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    const targetUser = db.users![userIdx];
+    if (targetUser.username === "admin") {
+      return res.status(400).json({ error: "No es posible eliminar al usuario administrador ('admin') maestro del sistema." });
+    }
+
+    db.users!.splice(userIdx, 1);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "users",
+      tableName: "Control de Accesos",
+      details: `Eliminó la cuenta de usuario '${targetUser.name}' (${targetUser.username}).`
+    });
+
+    saveDb(db);
+    res.json(db.users);
+  });
+
   // Rutas API Primero
 
   // Obtener estado actual de la DB
@@ -152,9 +388,19 @@ async function startServer() {
 
   // Restaurar estado de prueba
   app.post("/api/db/reset", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
-    const db = getInitialDbState();
-    db.logs.push({
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
+    const freshDb = getInitialDbState();
+    
+    // Preserve users between resets
+    freshDb.users = db.users;
+
+    freshDb.logs.push({
       id: "log_" + Date.now(),
       timestamp: new Date().toISOString(),
       user: currentUser,
@@ -163,19 +409,24 @@ async function startServer() {
       tableName: "Base de Datos",
       details: "Se restauró toda la base de datos a los valores por defecto de fábrica."
     });
-    saveDb(db);
-    res.json(db);
+    saveDb(freshDb);
+    res.json(freshDb);
   });
 
   // Crear una nueva tabla
   app.post("/api/db/tables", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { name } = req.body;
     if (!name || typeof name !== "string") {
       return res.status(400).json({ error: "El nombre de la tabla es obligatorio." });
     }
 
-    const db = loadDb();
     const tableId = "tbl_" + Date.now();
     const newTable: TableSchema = {
       id: tableId,
@@ -205,10 +456,15 @@ async function startServer() {
 
   // Borrar una tabla
   app.delete("/api/db/tables/:tableId", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId } = req.params;
 
-    const db = loadDb();
     const tableIdx = db.tables.findIndex(t => t.id === tableId);
     if (tableIdx === -1) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -233,7 +489,13 @@ async function startServer() {
 
   // Agregar una nueva columna a una tabla
   app.post("/api/db/tables/:tableId/columns", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId } = req.params;
     const { name, type, options } = req.body;
 
@@ -241,7 +503,6 @@ async function startServer() {
       return res.status(400).json({ error: "Nombre y tipo de columna son obligatorios." });
     }
 
-    const db = loadDb();
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -281,10 +542,15 @@ async function startServer() {
 
   // Borrar una columna
   app.delete("/api/db/tables/:tableId/columns/:columnId", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId, columnId } = req.params;
 
-    const db = loadDb();
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -321,11 +587,16 @@ async function startServer() {
 
   // Crear una nueva fila
   app.post("/api/db/tables/:tableId/rows", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId } = req.params;
     const rowData = req.body;
 
-    const db = loadDb();
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -367,11 +638,16 @@ async function startServer() {
 
   // Actualizar una fila
   app.put("/api/db/tables/:tableId/rows/:rowId", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId, rowId } = req.params;
     const newValues = req.body;
 
-    const db = loadDb();
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });
@@ -417,10 +693,15 @@ async function startServer() {
 
   // Eliminar una fila
   app.delete("/api/db/tables/:tableId/rows/:rowId", (req, res) => {
-    const currentUser = (req.headers["x-user"] as string) || "Anónimo";
+    const db = loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const currentUser = auth.user.name;
     const { tableId, rowId } = req.params;
 
-    const db = loadDb();
     const table = db.tables.find(t => t.id === tableId);
     if (!table) {
       return res.status(404).json({ error: "Tabla no encontrada." });

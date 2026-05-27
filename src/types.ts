@@ -29,7 +29,17 @@ export interface AuditLog {
   details: string;
 }
 
+export interface UserAccount {
+  id: string;
+  username: string;
+  name: string;
+  password?: string; // Optative: keep it simple for local verification
+  role: 'admin' | 'user';
+  permissions: 'read-write' | 'read-only';
+}
+
 export interface DbState {
   tables: TableSchema[];
   logs: AuditLog[];
+  users?: UserAccount[];
 }
