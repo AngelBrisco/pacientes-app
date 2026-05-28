@@ -39,8 +39,17 @@ export interface UserAccount {
   allowedTables?: string[]; // Table IDs the user is permitted to view. Empty or empty list with "*" means all tables.
 }
 
+export interface Snapshot {
+  id: string;
+  name: string;
+  timestamp: string;
+  creator: string;
+  tables: TableSchema[];
+}
+
 export interface DbState {
   tables: TableSchema[];
   logs: AuditLog[];
   users?: UserAccount[];
+  snapshots?: Snapshot[];
 }

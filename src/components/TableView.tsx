@@ -17,7 +17,8 @@ import {
   Paperclip,
   Upload,
   Download,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Braces
 } from "lucide-react";
 
 interface TableViewProps {
@@ -29,6 +30,7 @@ interface TableViewProps {
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   onDeleteRow: (rowId: string) => void;
   readOnly?: boolean;
+  isAdmin?: boolean;
 }
 
 export default function TableView({
@@ -40,6 +42,7 @@ export default function TableView({
   onUpdateRow,
   onDeleteRow,
   readOnly = false,
+  isAdmin = false,
 }: TableViewProps) {
   // Search and Sort states
   const [searchTerm, setSearchTerm] = useState("");
@@ -311,6 +314,109 @@ export default function TableView({
     reader.readAsText(file, "UTF-8");
   };
 
+  // IMPORTAR REGISTROS DESDE JSON
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert("El archivo seleccionado está vacío.");
+          return;
+        }
+
+        const jsonData = JSON.parse(text);
+        let rowsToImport: any[] = [];
+
+        if (Array.isArray(jsonData)) {
+          rowsToImport = jsonData;
+        } else if (jsonData && typeof jsonData === "object" && Array.isArray(jsonData.rows)) {
+          rowsToImport = jsonData.rows;
+        } else if (jsonData && typeof jsonData === "object") {
+          rowsToImport = [jsonData];
+        } else {
+          alert("El formato JSON no es válido. Debe ser un array de objetos o un objeto de tabla.");
+          return;
+        }
+
+        if (rowsToImport.length === 0) {
+          alert("No se encontraron registros de datos para importar.");
+          return;
+        }
+
+        const importedData: Record<string, any>[] = [];
+        
+        rowsToImport.forEach((rawRow: any) => {
+          const parsedRow: Record<string, any> = {};
+          
+          // Initial default values matching columns
+          table.columns.forEach(col => {
+            if (col.type === "boolean") parsedRow[col.id] = false;
+            else if (col.type === "number") parsedRow[col.id] = 0;
+            else parsedRow[col.id] = "";
+          });
+
+          // Match keys from JSON with column ID or Name
+          Object.keys(rawRow).forEach((key) => {
+            const cleanKey = key.trim().toLowerCase();
+            const matchedCol = table.columns.find(col => 
+              col.id.toLowerCase() === cleanKey || 
+              col.name.toLowerCase() === cleanKey
+            );
+            
+            if (matchedCol) {
+              let val = rawRow[key];
+              if (matchedCol.type === "boolean") {
+                parsedRow[matchedCol.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
+              } else if (matchedCol.type === "number") {
+                parsedRow[matchedCol.id] = val !== undefined && val !== "" ? Number(val) : 0;
+                if (isNaN(parsedRow[matchedCol.id])) parsedRow[matchedCol.id] = 0;
+              } else {
+                parsedRow[matchedCol.id] = val !== undefined && val !== null ? String(val) : "";
+              }
+            } else {
+              // Try direct mapping if the key matches col.id exactly
+              const directCol = table.columns.find(col => col.id === key);
+              if (directCol) {
+                let val = rawRow[key];
+                if (directCol.type === "boolean") {
+                  parsedRow[directCol.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
+                } else if (directCol.type === "number") {
+                  parsedRow[directCol.id] = val !== undefined && val !== "" ? Number(val) : 0;
+                  if (isNaN(parsedRow[directCol.id])) parsedRow[directCol.id] = 0;
+                } else {
+                  parsedRow[directCol.id] = val !== undefined && val !== null ? String(val) : "";
+                }
+              }
+            }
+          });
+
+          importedData.push(parsedRow);
+        });
+
+        if (onBulkAddRows) {
+          await onBulkAddRows(importedData);
+          alert(`¡Éxito! Se han importado correctamente ${importedData.length} registros desde el JSON.`);
+        } else {
+          for (const rowObj of importedData) {
+            onAddRow(rowObj);
+          }
+          alert(`¡Éxito! Se cargaron ${importedData.length} registros en la grilla.`);
+        }
+
+        e.target.value = "";
+      } catch (err: any) {
+        console.error(err);
+        alert(`Ocurrió un error al procesar el archivo JSON: ${err.message}`);
+      }
+    };
+
+    reader.readAsText(file, "UTF-8");
+  };
+
   return (
     <div id="table-view-module" className="flex flex-col flex-1 min-w-0 bg-transparent space-y-4">
       
@@ -366,15 +472,36 @@ export default function TableView({
                 </label>
               </div>
 
+              {/* Importar JSON con selector nativo oculto */}
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImportJSON}
+                  className="hidden"
+                  id="json-file-importer-input"
+                />
+                <label
+                  htmlFor="json-file-importer-input"
+                  className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-amber-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
+                  title="Importar registros desde un archivo JSON"
+                >
+                  <Braces className="w-4 h-4 shrink-0 text-amber-500" />
+                  <span className="hidden sm:inline">Importar JSON</span>
+                </label>
+              </div>
+
               {/* Add Column Button */}
-              <button
-                id="btn-toggle-add-column"
-                onClick={() => setShowAddCol(!showAddCol)}
-                className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-emerald-400 hover:bg-zinc-800/80 transition-all cursor-pointer shadow-xs"
-              >
-                <PlusCircle className="w-4.5 h-4.5 text-emerald-500" />
-                <span>Columna</span>
-              </button>
+              {isAdmin && (
+                <button
+                  id="btn-toggle-add-column"
+                  onClick={() => setShowAddCol(!showAddCol)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-emerald-400 hover:bg-zinc-800/80 transition-all cursor-pointer shadow-xs"
+                >
+                  <PlusCircle className="w-4.5 h-4.5 text-emerald-500" />
+                  <span>Columna</span>
+                </button>
+              )}
 
               {/* Add Row Button */}
               <button
@@ -494,7 +621,7 @@ export default function TableView({
                       </div>
                       
                       {/* Only allow deleting column if it is not the very first column (for index safety) */}
-                      {index > 0 && !readOnly && (
+                      {index > 0 && !readOnly && isAdmin && (
                         <button
                           id={`btn-col-del-${col.id}`}
                           onClick={() => {

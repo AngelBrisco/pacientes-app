@@ -176,6 +176,9 @@ function loadDb(): DbState {
         ];
         saveDb(parsed);
       }
+      if (!parsed.snapshots) {
+        parsed.snapshots = [];
+      }
       return parsed;
     }
   } catch (error) {
@@ -448,12 +451,126 @@ async function startServer() {
     res.json(freshDb);
   });
 
+  // API para Listar Snapshots / Backups
+  app.get("/api/db/snapshots", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Solo administradores pueden ver copias de seguridad." });
+    }
+    res.json(db.snapshots || []);
+  });
+
+  // API para Crear un Snapshot de Seguridad
+  app.post("/api/db/snapshots", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Solo administradores pueden crear copias de seguridad." });
+    }
+
+    const { name } = req.body;
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "El nombre del snapshot es obligatorio." });
+    }
+
+    const newSnapshot = {
+      id: "snap_" + Date.now(),
+      name: name.trim(),
+      timestamp: new Date().toISOString(),
+      creator: auth.user.name,
+      tables: JSON.parse(JSON.stringify(db.tables))
+    };
+
+    if (!db.snapshots) {
+      db.snapshots = [];
+    }
+
+    db.snapshots.push(newSnapshot);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se creó la copia de seguridad (Snapshot) '${newSnapshot.name}'.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
+  // API para Restaurar un Snapshot
+  app.post("/api/db/snapshots/:snapshotId/restore", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Solo administradores pueden restaurar copias de seguridad." });
+    }
+
+    const { snapshotId } = req.params;
+    const snapshot = db.snapshots?.find(s => s.id === snapshotId);
+    if (!snapshot) {
+      return res.status(404).json({ error: "Copia de seguridad (Snapshot) no encontrada." });
+    }
+
+    db.tables = JSON.parse(JSON.stringify(snapshot.tables));
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se restauró la base de datos a la copia de seguridad (Snapshot) '${snapshot.name}' creada el ${new Date(snapshot.timestamp).toLocaleString()}.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
+  // API para Eliminar un Snapshot
+  app.delete("/api/db/snapshots/:snapshotId", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Solo administradores pueden eliminar copias de seguridad." });
+    }
+
+    const { snapshotId } = req.params;
+    if (!db.snapshots) db.snapshots = [];
+
+    const snapIdx = db.snapshots.findIndex(s => s.id === snapshotId);
+    if (snapIdx === -1) {
+      return res.status(404).json({ error: "Copia de seguridad (Snapshot) no encontrada." });
+    }
+
+    const deletedSnap = db.snapshots[snapIdx];
+    db.snapshots.splice(snapIdx, 1);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se eliminó la copia de seguridad (Snapshot) '${deletedSnap.name}'.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
   // Crear una nueva tabla
   app.post("/api/db/tables", (req, res) => {
     const db = loadDb();
-    const auth = verifyWriteAccess(req, db);
+    const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
-      return res.status(403).json({ error: auth.error });
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede crear tablas." });
     }
 
     const currentUser = auth.user.name;
@@ -492,9 +609,9 @@ async function startServer() {
   // Borrar una tabla
   app.delete("/api/db/tables/:tableId", (req, res) => {
     const db = loadDb();
-    const auth = verifyWriteAccess(req, db);
+    const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
-      return res.status(403).json({ error: auth.error });
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede borrar tablas." });
     }
 
     const currentUser = auth.user.name;
@@ -529,9 +646,9 @@ async function startServer() {
   // Agregar una nueva columna a una tabla
   app.post("/api/db/tables/:tableId/columns", (req, res) => {
     const db = loadDb();
-    const auth = verifyWriteAccess(req, db);
+    const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
-      return res.status(403).json({ error: auth.error });
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede gestionar columnas." });
     }
 
     const currentUser = auth.user.name;
@@ -588,9 +705,9 @@ async function startServer() {
   // Borrar una columna
   app.delete("/api/db/tables/:tableId/columns/:columnId", (req, res) => {
     const db = loadDb();
-    const auth = verifyWriteAccess(req, db);
+    const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
-      return res.status(403).json({ error: auth.error });
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede borrar columnas." });
     }
 
     const currentUser = auth.user.name;

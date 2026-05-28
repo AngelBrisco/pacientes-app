@@ -10,6 +10,7 @@ interface SidebarProps {
   onDeleteTable: (id: string) => void;
   logs: AuditLog[];
   readOnly?: boolean;
+  isAdmin?: boolean;
 }
 
 export default function Sidebar({
@@ -20,6 +21,7 @@ export default function Sidebar({
   onDeleteTable,
   logs = [],
   readOnly = false,
+  isAdmin = false,
 }: SidebarProps) {
   const [newTableName, setNewTableName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -71,7 +73,7 @@ export default function Sidebar({
             <span className="font-mono text-[10.5px] uppercase font-bold text-zinc-500 tracking-widest flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-indigo-400" /> Tablas (Schemas)
             </span>
-            {!readOnly && (
+            {!readOnly && isAdmin && (
               <button
                 id="btn-toggle-add-table"
                 onClick={() => setShowAddForm(!showAddForm)}
@@ -142,7 +144,7 @@ export default function Sidebar({
                       <span className="font-mono text-[9px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded" title="Cantidad de filas">
                         {table.rows?.length || 0}r
                       </span>
-                      {!readOnly && (
+                      {!readOnly && isAdmin && (
                         <button
                           id={`btn-delete-table-${table.id}`}
                           onClick={(e) => {
@@ -166,58 +168,60 @@ export default function Sidebar({
         </div>
 
         {/* SECTION 2: Persistent Audit Trail Logs */}
-        <div className="pt-4 border-t border-zinc-900">
-          <div className="flex items-center justify-between px-2 mb-3">
-            <span className="font-mono text-[10.5px] uppercase font-bold text-zinc-500 tracking-widest flex items-center gap-1.5">
-              <History className="w-3.5 h-3.5 text-indigo-400" /> Audit Trail (Historial)
-            </span>
-            <span className="font-mono text-[9px] text-zinc-600 font-bold bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded-full">
-              {logs.length}
-            </span>
-          </div>
+        {isAdmin && (
+          <div className="pt-4 border-t border-zinc-900">
+            <div className="flex items-center justify-between px-2 mb-3">
+              <span className="font-mono text-[10.5px] uppercase font-bold text-zinc-500 tracking-widest flex items-center gap-1.5">
+                <History className="w-3.5 h-3.5 text-indigo-400" /> Audit Trail (Historial)
+              </span>
+              <span className="font-mono text-[9px] text-zinc-600 font-bold bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded-full">
+                {logs.length}
+              </span>
+            </div>
 
-          <div className="space-y-3.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar text-[11px]" id="audit-trail-scroller">
-            {logs.length === 0 ? (
-              <div className="text-center py-6 text-zinc-650">No hay logs registrados en audit.</div>
-            ) : (
-              [...logs].reverse().slice(0, 15).map((log) => {
-                const isSchema = log.action === "SCHEMA_CHANGE";
-                const isDelete = log.action === "DELETE";
-                const isCreate = log.action === "CREATE";
-                
-                const badgeColor = isSchema 
-                  ? "bg-amber-500/10 text-amber-500 border-amber-500/20" 
-                  : isDelete 
-                    ? "bg-rose-500/10 text-rose-500 border-rose-500/20"
-                    : isCreate
-                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                      : "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+            <div className="space-y-3.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar text-[11px]" id="audit-trail-scroller">
+              {logs.length === 0 ? (
+                <div className="text-center py-6 text-zinc-650">No hay logs registrados en audit.</div>
+              ) : (
+                [...logs].reverse().slice(0, 15).map((log) => {
+                  const isSchema = log.action === "SCHEMA_CHANGE";
+                  const isDelete = log.action === "DELETE";
+                  const isCreate = log.action === "CREATE";
+                  
+                  const badgeColor = isSchema 
+                    ? "bg-amber-500/10 text-amber-500 border-amber-500/20" 
+                    : isDelete 
+                      ? "bg-rose-500/10 text-rose-500 border-rose-500/20"
+                      : isCreate
+                        ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                        : "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
 
-                return (
-                  <div
-                    key={log.id}
-                    className="p-2.5 bg-zinc-900/30 border border-zinc-900/60 rounded-xl space-y-1.5"
-                    id={`log-item-${log.id}`}
-                  >
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className={`px-1.5 py-0.2 rounded border text-[8.5px] font-mono uppercase font-semibold ${badgeColor}`}>
-                        {log.action}
-                      </span>
-                      <span className="text-zinc-600 font-mono font-medium">{formatTime(log.timestamp)}</span>
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-2.5 bg-zinc-900/30 border border-zinc-900/60 rounded-xl space-y-1.5"
+                      id={`log-item-${log.id}`}
+                    >
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className={`px-1.5 py-0.2 rounded border text-[8.5px] font-mono uppercase font-semibold ${badgeColor}`}>
+                          {log.action}
+                        </span>
+                        <span className="text-zinc-600 font-mono font-medium">{formatTime(log.timestamp)}</span>
+                      </div>
+                      <p className="text-zinc-300 font-sans leading-relaxed break-words">{log.details}</p>
+                      <div className="flex items-center gap-1 text-zinc-500 text-[10px] bg-zinc-950/40 p-1 rounded border border-zinc-900">
+                        <User className="w-2.5 h-2.5 text-indigo-400" />
+                        <span className="font-medium truncate text-zinc-400">{log.user}</span>
+                        <span className="text-zinc-600 select-none">•</span>
+                        <span className="truncate max-w-[50%] text-[9.5px] font-mono text-zinc-500">{log.tableName}</span>
+                      </div>
                     </div>
-                    <p className="text-zinc-300 font-sans leading-relaxed break-words">{log.details}</p>
-                    <div className="flex items-center gap-1 text-zinc-500 text-[10px] bg-zinc-950/40 p-1 rounded border border-zinc-900">
-                      <User className="w-2.5 h-2.5 text-indigo-400" />
-                      <span className="font-medium truncate text-zinc-400">{log.user}</span>
-                      <span className="text-zinc-600 select-none">•</span>
-                      <span className="truncate max-w-[50%] text-[9.5px] font-mono text-zinc-500">{log.tableName}</span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
       </div>
 

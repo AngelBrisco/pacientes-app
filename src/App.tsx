@@ -7,6 +7,7 @@ import TableView from "./components/TableView";
 import KanbanView from "./components/KanbanView";
 import DictionaryView from "./components/DictionaryView";
 import CalendarView from "./components/CalendarView";
+import BackupsView from "./components/BackupsView";
 import {
   Table,
   Kanban,
@@ -22,13 +23,14 @@ import {
   LogOut,
   ShieldCheck,
   Eye,
-  Calendar
+  Calendar,
+  Archive
 } from "lucide-react";
 
 export default function App() {
   const [dbState, setDbState] = useState<DbState | null>(null);
   const [activeTableId, setActiveTableId] = useState<string>("");
-  const [activeView, setActiveView] = useState<"table" | "kanban" | "dictionary" | "users">("table");
+  const [activeView, setActiveView] = useState<"table" | "kanban" | "dictionary" | "users" | "backups">("table");
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
     try {
       const stored = localStorage.getItem("nococlone_session");
@@ -138,6 +140,19 @@ export default function App() {
     await apiAction("/api/db/tables", "POST", { name });
   };
 
+  // BACKUPS/SNAPSHOTS HANDLERS
+  const handleTakeSnapshot = async (name: string) => {
+    await apiAction("/api/db/snapshots", "POST", { name });
+  };
+
+  const handleRestoreSnapshot = async (id: string) => {
+    await apiAction(`/api/db/snapshots/${id}/restore`, "POST");
+  };
+
+  const handleDeleteSnapshot = async (id: string) => {
+    await apiAction(`/api/db/snapshots/${id}`, "DELETE");
+  };
+
   // DELETE TABLE
   const handleDeleteTable = async (tableId: string) => {
     await apiAction(`/api/db/tables/${tableId}`, "DELETE");
@@ -205,6 +220,7 @@ export default function App() {
         onDeleteTable={handleDeleteTable}
         logs={dbState?.logs || []}
         readOnly={currentUser.permissions === "read-only"}
+        isAdmin={currentUser.role === "admin"}
       />
 
       {/* Main Studio Console workspace */}
@@ -254,18 +270,20 @@ export default function App() {
                     <span>Kanban</span>
                   </button>
 
-                  <button
-                    id="tab-view-dictionary"
-                    onClick={() => setActiveView("dictionary")}
-                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
-                      activeView === "dictionary"
-                        ? "text-indigo-400 border-b-2 border-indigo-500"
-                        : "text-zinc-500 hover:text-zinc-300"
-                    }`}
-                  >
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>Diccionario (DDL)</span>
-                  </button>
+                  {currentUser.role === "admin" && (
+                    <button
+                      id="tab-view-dictionary"
+                      onClick={() => setActiveView("dictionary")}
+                      className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                        activeView === "dictionary"
+                          ? "text-indigo-400 border-b-2 border-indigo-500"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>Diccionario (DDL)</span>
+                    </button>
+                  )}
 
                   <button
                     id="tab-view-calendar"
@@ -283,18 +301,33 @@ export default function App() {
               )}
 
               {currentUser.role === "admin" && (
-                <button
-                  id="tab-view-users"
-                  onClick={() => setActiveView("users")}
-                  className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
-                    activeView === "users"
-                      ? "text-indigo-400 border-b-2 border-indigo-500"
-                      : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Control de Accesos</span>
-                </button>
+                <>
+                  <button
+                    id="tab-view-users"
+                    onClick={() => setActiveView("users")}
+                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      activeView === "users"
+                        ? "text-indigo-400 border-b-2 border-indigo-500"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>Control de Accesos</span>
+                  </button>
+
+                  <button
+                    id="tab-view-backups"
+                    onClick={() => setActiveView("backups")}
+                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      activeView === "backups"
+                        ? "text-indigo-400 border-b-2 border-indigo-500"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    <Archive className="w-3.5 h-3.5" />
+                    <span>Copias (Snapshots)</span>
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -369,6 +402,14 @@ export default function App() {
             </div>
           ) : activeView === "users" ? (
             <UserManagementView currentUser={currentUser} tables={dbState?.tables || []} />
+          ) : activeView === "backups" ? (
+            <BackupsView
+              snapshots={dbState?.snapshots || []}
+              onTakeSnapshot={handleTakeSnapshot}
+              onRestoreSnapshot={handleRestoreSnapshot}
+              onDeleteSnapshot={handleDeleteSnapshot}
+              isSyncing={isSyncing}
+            />
           ) : !activeTable ? (
             <div className="h-full flex flex-col items-center justify-center max-w-md mx-auto text-center space-y-4" id="view-empty-schema-panel">
               <Server className="w-12 h-12 text-zinc-700" />
@@ -398,6 +439,7 @@ export default function App() {
                   onUpdateRow={handleUpdateRow}
                   onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}
+                  isAdmin={currentUser.role === "admin"}
                 />
               )}
 
@@ -409,7 +451,7 @@ export default function App() {
                 />
               )}
 
-              {activeView === "dictionary" && <DictionaryView table={activeTable} />}
+              {activeView === "dictionary" && currentUser.role === "admin" && <DictionaryView table={activeTable} />}
 
               {activeView === "calendar" && <CalendarView table={activeTable} />}
             </div>
