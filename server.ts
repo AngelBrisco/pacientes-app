@@ -599,12 +599,31 @@ async function startServer() {
         dbRows = rows.map((row: any, rIdx: number) => {
           const newRow: any = { id: row.id || "row_" + Date.now() + "_" + rIdx };
           dbColumns.forEach((col: any) => {
-            const val = row[col.id];
+            let val = row[col.id];
+            if (val === undefined) {
+              const lookupCandidates = [
+                col.name,
+                col.title,
+                col.name ? String(col.name).toLowerCase() : "",
+                col.id && col.id.startsWith("col_") ? col.id.substring(4) : ""
+              ].filter(Boolean);
+              for (const cand of lookupCandidates) {
+                if (row[cand] !== undefined) {
+                  val = row[cand];
+                  break;
+                }
+              }
+            }
+
             if (col.type === "boolean") {
               newRow[col.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
             } else if (col.type === "number") {
-              newRow[col.id] = val !== undefined && val !== "" ? Number(val) : 0;
-              if (isNaN(newRow[col.id])) newRow[col.id] = 0;
+              if (val === undefined || val === null || val === "") {
+                newRow[col.id] = "";
+              } else {
+                const num = Number(val);
+                newRow[col.id] = isNaN(num) ? "" : num;
+              }
             } else {
               newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
             }
@@ -668,12 +687,31 @@ async function startServer() {
       ? rows.map((row: any, rIdx: number) => {
           const newRow: any = { id: row.id || "row_" + Date.now() + "_" + rIdx };
           dbColumns.forEach((col: any) => {
-            const val = row[col.id];
+            let val = row[col.id];
+            if (val === undefined) {
+              const lookupCandidates = [
+                col.name,
+                col.title,
+                col.name ? String(col.name).toLowerCase() : "",
+                col.id && col.id.startsWith("col_") ? col.id.substring(4) : ""
+              ].filter(Boolean);
+              for (const cand of lookupCandidates) {
+                if (row[cand] !== undefined) {
+                  val = row[cand];
+                  break;
+                }
+              }
+            }
+
             if (col.type === "boolean") {
               newRow[col.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
             } else if (col.type === "number") {
-              newRow[col.id] = val !== undefined && val !== "" ? Number(val) : 0;
-              if (isNaN(newRow[col.id])) newRow[col.id] = 0;
+              if (val === undefined || val === null || val === "") {
+                newRow[col.id] = "";
+              } else {
+                const num = Number(val);
+                newRow[col.id] = isNaN(num) ? "" : num;
+              }
             } else {
               newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
             }

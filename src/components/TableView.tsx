@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { TableSchema, Column, Row, ColumnType } from "../types";
+import { normalizeImportedTableJson } from "../lib/normalization";
 import {
   Plus,
   Trash2,
@@ -520,35 +521,16 @@ export default function TableView({
         }
 
         const data = JSON.parse(text);
-        if (data && data.columns && Array.isArray(data.columns)) {
-          setTempColumns(data.columns);
-          setTempRows(Array.isArray(data.rows) ? data.rows : []);
-          setRecreateSuccessMessage(`Estilo copia de seguridad: ${data.columns.length} columnas y ${data.rows?.length || 0} registros listos.`);
-        } else {
-          // derivation
-          const list = Array.isArray(data) ? data : [data];
-          if (list.length === 0) {
-            alert("No hay registros que procesar.");
-            return;
-          }
-          const keys = Array.from(new Set(list.flatMap((o: any) => Object.keys(o))));
-          const columns = keys.map((k, idx) => ({
-            id: "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx,
-            name: k,
-            type: typeof list[0][k] === "number" ? "number" as const : typeof list[0][k] === "boolean" ? "boolean" as const : "text" as const
-          }));
-          const rows = list.map((o: any) => {
-            const rowWithColIds: any = {};
-            keys.forEach((k, idx) => {
-              const colId = "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx;
-              rowWithColIds[colId] = o[k] !== undefined && o[k] !== null ? o[k] : "";
-            });
-            return rowWithColIds;
-          });
-          setTempColumns(columns);
-          setTempRows(rows);
-          setRecreateSuccessMessage(`JSON derivado: ${columns.length} campos y ${rows.length} registros listos.`);
+        const normalized = normalizeImportedTableJson(data);
+
+        if (normalized.columns.length === 0) {
+          alert("No se pudieron identificar columnas ni datos en el archivo JSON.");
+          return;
         }
+
+        setTempColumns(normalized.columns);
+        setTempRows(normalized.rows);
+        setRecreateSuccessMessage(`Esquema y datos JSON procesados: ${normalized.columns.length} campos y ${normalized.rows.length} registros listos.`);
       } catch (err: any) {
         alert("Error al parsear JSON: " + err.message);
       }

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet } from "lucide-react";
 import { TableSchema, AuditLog } from "../types";
+import { normalizeImportedTableJson } from "../lib/normalization";
 
 interface SidebarProps {
   tables: TableSchema[];
@@ -29,6 +30,7 @@ export default function Sidebar({
   const [parsedColumns, setParsedColumns] = useState<any[] | undefined>(undefined);
   const [parsedRows, setParsedRows] = useState<any[] | undefined>(undefined);
   const [importSuccessMessage, setImportSuccessMessage] = useState("");
+  const [deletingTableId, setDeletingTableId] = useState<string | null>(null);
 
   const resetFormStates = () => {
     setNewTableName("");
@@ -86,39 +88,19 @@ export default function Sidebar({
 
         if (type === "json") {
           const data = JSON.parse(text);
-          // Check if Complete structured table JSON or simple list array
-          if (data && data.columns && Array.isArray(data.columns)) {
-            if (data.name && !newTableName) {
-              setNewTableName(data.name);
-            }
-            setParsedColumns(data.columns);
-            setParsedRows(Array.isArray(data.rows) ? data.rows : []);
-            setImportSuccessMessage(`Estructura JSON: ${data.columns.length} campos y ${data.rows?.length || 0} registros listos.`);
-          } else {
-            const list = Array.isArray(data) ? data : [data];
-            if (list.length === 0) {
-              alert("El JSON no contiene filas válidas.");
-              return;
-            }
-            // Derive columns
-            const keys = Array.from(new Set(list.flatMap((o: any) => Object.keys(o))));
-            const columns = keys.map((k, idx) => ({
-              id: "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx,
-              name: k,
-              type: typeof list[0][k] === "number" ? "number" : typeof list[0][k] === "boolean" ? "boolean" : "text"
-            }));
-            const rows = list.map((o: any) => {
-              const rowWithColIds: any = {};
-              keys.forEach((k, idx) => {
-                const colId = "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx;
-                rowWithColIds[colId] = o[k] !== undefined && o[k] !== null ? o[k] : "";
-              });
-              return rowWithColIds;
-            });
-            setParsedColumns(columns);
-            setParsedRows(rows);
-            setImportSuccessMessage(`JSON de datos derivado: ${columns.length} columnas descubiertas y ${rows.length} registros listos.`);
+          const normalized = normalizeImportedTableJson(data);
+
+          if (normalized.columns.length === 0) {
+            alert("No se pudieron identificar columnas ni datos en el archivo JSON.");
+            return;
           }
+
+          if (normalized.name && !newTableName) {
+            setNewTableName(normalized.name);
+          }
+          setParsedColumns(normalized.columns);
+          setParsedRows(normalized.rows);
+          setImportSuccessMessage(`JSON procesado con éxito: ${normalized.columns.length} columnas y ${normalized.rows.length} registros listos.`);
         } else if (type === "csv") {
           const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
           if (lines.length === 0) {
@@ -357,19 +339,38 @@ export default function Sidebar({
                         {table.rows?.length || 0}r
                       </span>
                       {!readOnly && isAdmin && (
-                        <button
-                          id={`btn-delete-table-${table.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (confirm(`¿Seguro que deseas eliminar la tabla '${table.name}'? Esto borrará todas sus columnas y registros permanentemente.`)) {
-                              onDeleteTable(table.id);
-                            }
-                          }}
-                          className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer"
-                          title="Borrar Tabla"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center">
+                          {deletingTableId === table.id ? (
+                            <button
+                              id={`btn-delete-table-confirm-${table.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteTable(table.id);
+                                setDeletingTableId(null);
+                              }}
+                              className="px-1.5 py-0.5 bg-rose-600 hover:bg-rose-505 text-white text-[10px] font-bold rounded cursor-pointer shrink-0 animate-pulse"
+                              title="Click para Confirmar Eliminación"
+                            >
+                              ¿Borrar?
+                            </button>
+                          ) : (
+                            <button
+                              id={`btn-delete-table-${table.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingTableId(table.id);
+                                // Auto cancel in 3 seconds
+                                setTimeout(() => {
+                                  setDeletingTableId(p => p === table.id ? null : p);
+                                }, 3000);
+                              }}
+                              className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer transition-colors"
+                              title="Borrar Tabla"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
