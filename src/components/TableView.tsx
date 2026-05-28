@@ -18,7 +18,8 @@ import {
   Upload,
   Download,
   FileSpreadsheet,
-  Braces
+  Braces,
+  RefreshCw
 } from "lucide-react";
 
 interface TableViewProps {
@@ -27,6 +28,7 @@ interface TableViewProps {
   onDeleteColumn: (columnId: string) => void;
   onAddRow: (rowData: Record<string, any>) => void;
   onBulkAddRows?: (rowsData: Record<string, any>[]) => Promise<void>;
+  onRecreateTable?: (tableId: string, columns: any[], rows: any[]) => Promise<void>;
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   onDeleteRow: (rowId: string) => void;
   readOnly?: boolean;
@@ -39,6 +41,7 @@ export default function TableView({
   onDeleteColumn,
   onAddRow,
   onBulkAddRows,
+  onRecreateTable,
   onUpdateRow,
   onDeleteRow,
   readOnly = false,
@@ -64,6 +67,14 @@ export default function TableView({
   const sessionStr = localStorage.getItem("nococlone_session");
   const sessionUser = sessionStr ? JSON.parse(sessionStr) : null;
   const currentUserUsername = sessionUser ? sessionUser.username : "";
+
+  // Unified Export & Recreate States
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showRecreateModal, setShowRecreateModal] = useState(false);
+  const [recreateMethod, setRecreateMethod] = useState<"csv" | "json">("csv");
+  const [recreateSuccessMessage, setRecreateSuccessMessage] = useState("");
+  const [tempColumns, setTempColumns] = useState<any[] | null>(null);
+  const [tempRows, setTempRows] = useState<any[] | null>(null);
 
   // Sorting columns logic
   const handleSort = (colId: string) => {
@@ -195,6 +206,31 @@ export default function TableView({
     }
   };
 
+  // CSV robust quote parsing scanner helper
+  const parseCSVLine = (lineText: string): string[] => {
+    const result: string[] = [];
+    let insideQuote = false;
+    let entry = "";
+    for (let i = 0; i < lineText.length; i++) {
+      const char = lineText[i];
+      if (char === '"') {
+        if (insideQuote && lineText[i + 1] === '"') {
+          entry += '"';
+          i++; // skip escaped quote sibling
+        } else {
+          insideQuote = !insideQuote;
+        }
+      } else if (char === ',' && !insideQuote) {
+        result.push(entry.trim());
+        entry = "";
+      } else {
+        entry += char;
+      }
+    }
+    result.push(entry.trim());
+    return result;
+  };
+
   // IMPORTAR REGISTROS DESDE CSV CON PARSE COMPACTO
   const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -214,31 +250,6 @@ export default function TableView({
           alert("No se encontraron registros de datos.");
           return;
         }
-
-        // CSV robust quote parsing scanner helper
-        const parseCSVLine = (lineText: string): string[] => {
-          const result: string[] = [];
-          let insideQuote = false;
-          let entry = "";
-          for (let i = 0; i < lineText.length; i++) {
-            const char = lineText[i];
-            if (char === '"') {
-              if (insideQuote && lineText[i + 1] === '"') {
-                entry += '"';
-                i++; // skip escaped quote sibling
-              } else {
-                insideQuote = !insideQuote;
-              }
-            } else if (char === ',' && !insideQuote) {
-              result.push(entry.trim());
-              entry = "";
-            } else {
-              entry += char;
-            }
-          }
-          result.push(entry.trim());
-          return result;
-        };
 
         // Header parsing & alignment
         const originalHeaders = parseCSVLine(lines[0]);
@@ -417,6 +428,148 @@ export default function TableView({
     reader.readAsText(file, "UTF-8");
   };
 
+  // EXPORTAR TABLA COMPLETA EN FORMATO JSON
+  const handleExportJSON = () => {
+    try {
+      const exportObject = {
+        type: "table_snapshot",
+        name: table.name,
+        columns: table.columns,
+        rows: table.rows
+      };
+
+      const jsonContent = JSON.stringify(exportObject, null, 2);
+      const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${table.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}_esquema_datos.json`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setShowExportMenu(false);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Ocurrió un error al exportar la tabla en formato JSON: ${err.message}`);
+    }
+  };
+
+  // RECREAR TABLA HANDLERS (ADMIN-ONLY OVERWRITE)
+  const handleRecreateCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert("El archivo está vacío.");
+          return;
+        }
+
+        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+        if (lines.length === 0) {
+          alert("El archivo CSV no contiene líneas de datos.");
+          return;
+        }
+
+        const rawHeaders = parseCSVLine(lines[0]);
+        const headers = rawHeaders.map((h, i) => {
+          const name = h.replace(/^\uFEFF/, "").trim();
+          return {
+            id: "col_" + name.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + i,
+            name: name || `Campo_${i + 1}`,
+            type: "text" as const
+          };
+        });
+
+        const rows: any[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cellVals = parseCSVLine(lines[i]);
+          if (cellVals.length === 0 || (cellVals.length === 1 && cellVals[0] === "")) continue;
+          const rowObj: any = {};
+          headers.forEach((h, colIdx) => {
+            rowObj[h.id] = cellVals[colIdx] !== undefined ? cellVals[colIdx] : "";
+          });
+          rows.push(rowObj);
+        }
+
+        setTempColumns(headers);
+        setTempRows(rows);
+        setRecreateSuccessMessage(`Esquema CSV cargado: ${headers.length} columnas y ${rows.length} registros listos.`);
+      } catch (err: any) {
+        alert("Error al parsear CSV: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  const handleRecreateJSONUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert("El archivo está vacío.");
+          return;
+        }
+
+        const data = JSON.parse(text);
+        if (data && data.columns && Array.isArray(data.columns)) {
+          setTempColumns(data.columns);
+          setTempRows(Array.isArray(data.rows) ? data.rows : []);
+          setRecreateSuccessMessage(`Estilo copia de seguridad: ${data.columns.length} columnas y ${data.rows?.length || 0} registros listos.`);
+        } else {
+          // derivation
+          const list = Array.isArray(data) ? data : [data];
+          if (list.length === 0) {
+            alert("No hay registros que procesar.");
+            return;
+          }
+          const keys = Array.from(new Set(list.flatMap((o: any) => Object.keys(o))));
+          const columns = keys.map((k, idx) => ({
+            id: "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx,
+            name: k,
+            type: typeof list[0][k] === "number" ? "number" as const : typeof list[0][k] === "boolean" ? "boolean" as const : "text" as const
+          }));
+          const rows = list.map((o: any) => {
+            const rowWithColIds: any = {};
+            keys.forEach((k, idx) => {
+              const colId = "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx;
+              rowWithColIds[colId] = o[k] !== undefined && o[k] !== null ? o[k] : "";
+            });
+            return rowWithColIds;
+          });
+          setTempColumns(columns);
+          setTempRows(rows);
+          setRecreateSuccessMessage(`JSON derivado: ${columns.length} campos y ${rows.length} registros listos.`);
+        }
+      } catch (err: any) {
+        alert("Error al parsear JSON: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  const handleExecuteRecreate = async () => {
+    if (!tempColumns || !onRecreateTable) return;
+    try {
+      await onRecreateTable(table.id, tempColumns, tempRows || []);
+      setTempColumns(null);
+      setTempRows(null);
+      setRecreateSuccessMessage("");
+      setShowRecreateModal(false);
+      alert("¡Éxito! Estructura de tabla y registros recreados correctamente.");
+    } catch (err: any) {
+      alert("Fallo al recrear la tabla: " + err.message);
+    }
+  };
+
   return (
     <div id="table-view-module" className="flex flex-col flex-1 min-w-0 bg-transparent space-y-4">
       
@@ -438,58 +591,67 @@ export default function TableView({
         </div>
 
         {/* Create column & user trigger controls */}
-        <div className="flex items-center gap-2">
-          {/* Exportar CSV (Disponible para todo nivel de accesos) */}
-          <button
-            type="button"
-            id="btn-export-csv"
-            onClick={handleExportCSV}
-            className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-indigo-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
-            title="Exportar datos activos de la tabla a CSV"
-          >
-            <Download className="w-4 h-4 shrink-0 text-indigo-400" />
-            <span className="hidden sm:inline">Exportar CSV</span>
-          </button>
+        <div className="flex items-center gap-2 relative">
+          
+          {/* Unified Export Button */}
+          <div className="relative">
+            <button
+              type="button"
+              id="btn-unified-export"
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-indigo-405 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
+              title="Exportar esquema o datos"
+            >
+              <Download className="w-4 h-4 shrink-0 text-indigo-400" />
+              <span>Exportar...</span>
+            </button>
+
+            {showExportMenu && (
+              <>
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setShowExportMenu(false)}
+                />
+                <div className="absolute right-0 mt-2 w-48 bg-zinc-950 border border-zinc-850 rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-1" id="export-dropdown-menu">
+                  <button
+                    onClick={() => { handleExportCSV(); setShowExportMenu(false); }}
+                    className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-405" />
+                    <span>CSV (Sólo Datos)</span>
+                  </button>
+                  <button
+                    onClick={() => { handleExportJSON(); setShowExportMenu(false); }}
+                    className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Braces className="w-3.5 h-3.5 text-indigo-405" />
+                    <span>JSON (Estructura + Datos)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {!readOnly && (
             <>
-              {/* Importar CSV con selector nativo oculto */}
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleImportCSV}
-                  className="hidden"
-                  id="csv-file-importer-input"
-                />
-                <label
-                  htmlFor="csv-file-importer-input"
-                  className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-emerald-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
-                  title="Importar registros desde un archivo CSV"
+              {/* Recrear Tabla por Importación (Solo Admins) */}
+              {isAdmin && (
+                <button
+                  id="btn-trigger-recreate-table"
+                  type="button"
+                  onClick={() => {
+                    setTempColumns(null);
+                    setTempRows(null);
+                    setRecreateSuccessMessage("");
+                    setShowRecreateModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-rose-500/10 hover:bg-rose-500/15 text-rose-400 border border-rose-500/20 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
+                  title="Sobrescribir completamente la estructura de la tabla activa e importar datos"
                 >
-                  <FileSpreadsheet className="w-4 h-4 shrink-0 text-emerald-500" />
-                  <span className="hidden sm:inline">Importar CSV</span>
-                </label>
-              </div>
-
-              {/* Importar JSON con selector nativo oculto */}
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImportJSON}
-                  className="hidden"
-                  id="json-file-importer-input"
-                />
-                <label
-                  htmlFor="json-file-importer-input"
-                  className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-amber-400 border border-zinc-700/85 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-xs"
-                  title="Importar registros desde un archivo JSON"
-                >
-                  <Braces className="w-4 h-4 shrink-0 text-amber-500" />
-                  <span className="hidden sm:inline">Importar JSON</span>
-                </label>
-              </div>
+                  <RefreshCw className="w-4 h-4 shrink-0 text-rose-450" />
+                  <span>Recrear Tabla...</span>
+                </button>
+              )}
 
               {/* Add Column Button */}
               {isAdmin && (
@@ -1029,6 +1191,131 @@ export default function TableView({
               )}
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Recreate Table Schema and Rows Overwrite Modal */}
+      {showRecreateModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" id="modal-backdrop-recreate-table">
+          <div className="bg-zinc-950 border border-zinc-850 w-full max-w-md rounded-2xl shadow-2xl flex flex-col p-5 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-rose-450 animate-spin" />
+                <h3 className="font-sans font-bold text-zinc-100 text-sm">
+                  Recrear Tabla Física: {table.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+                onClick={() => {
+                  setShowRecreateModal(false);
+                  setTempColumns(null);
+                  setTempRows(null);
+                  setRecreateSuccessMessage("");
+                }}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
+              Esta operación es destructiva. Reemplazará permanentemente todas las columnas descritas de la tabla activa <span className="font-mono text-indigo-400">"{table.name}"</span> y borrará los registros para sobrescribirlos con los datos del archivo elegido.
+            </p>
+
+            {/* Selector de Método */}
+            <div className="grid grid-cols-2 gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => { setRecreateMethod("csv"); setTempColumns(null); setTempRows(null); setRecreateSuccessMessage(""); }}
+                className={`py-2 rounded-lg text-xs font-semibold border cursor-pointer text-center select-none transition-all ${
+                  recreateMethod === "csv"
+                    ? "bg-zinc-900 border-zinc-700 text-zinc-100 shadow-sm"
+                    : "bg-transparent border-transparent text-zinc-500 hover:text-zinc-350"
+                }`}
+              >
+                Cargar Archivo CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => { setRecreateMethod("json"); setTempColumns(null); setTempRows(null); setRecreateSuccessMessage(""); }}
+                className={`py-2 rounded-lg text-xs font-semibold border cursor-pointer text-center select-none transition-all ${
+                  recreateMethod === "json"
+                    ? "bg-zinc-900 border-zinc-700 text-zinc-100 shadow-sm"
+                    : "bg-transparent border-transparent text-zinc-500 hover:text-zinc-350"
+                }`}
+              >
+                Cargar Archivo JSON
+              </button>
+            </div>
+
+            {/* Input de archivo */}
+            {recreateMethod === "csv" ? (
+              <div className="p-4 bg-zinc-900/40 border border-zinc-850 rounded-xl text-center" id="recreate-csv-upload-zone">
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleRecreateCSVUpload}
+                  id="recreate-csv-file"
+                  className="hidden"
+                />
+                <label
+                  htmlFor="recreate-csv-file"
+                  className="flex flex-col items-center justify-center gap-2 py-2 text-xs text-zinc-350 hover:text-indigo-400 cursor-pointer transition-all"
+                >
+                  <Upload className="w-5 h-5 text-indigo-405" />
+                  <span className="font-semibold">Examinar archivo CSV (.csv)</span>
+                </label>
+              </div>
+            ) : (
+              <div className="p-4 bg-zinc-900/40 border border-zinc-850 rounded-xl text-center" id="recreate-json-upload-zone">
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleRecreateJSONUpload}
+                  id="recreate-json-file"
+                  className="hidden"
+                />
+                <label
+                  htmlFor="recreate-json-file"
+                  className="flex flex-col items-center justify-center gap-2 py-2 text-xs text-zinc-350 hover:text-indigo-400 cursor-pointer transition-all"
+                >
+                  <Upload className="w-5 h-5 text-indigo-405" />
+                  <span className="font-semibold">Examinar archivo JSON (.json)</span>
+                </label>
+              </div>
+            )}
+
+            {/* Mensaje de carga de datos exitosa */}
+            {recreateSuccessMessage && (
+              <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 text-emerald-400 rounded-xl text-xs font-mono font-medium leading-normal animate-fade-in">
+                ✓ {recreateSuccessMessage}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-900">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRecreateModal(false);
+                  setTempColumns(null);
+                  setTempRows(null);
+                  setRecreateSuccessMessage("");
+                }}
+                className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-xs font-semibold text-zinc-400 hover:text-zinc-200 cursor-pointer transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={!tempColumns}
+                onClick={handleExecuteRecreate}
+                className="px-4.5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:pointer-events-none text-white font-bold rounded-xl text-xs cursor-pointer shadow-md transition-all"
+              >
+                Sobrescribir y Recrear
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

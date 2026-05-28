@@ -136,8 +136,13 @@ export default function App() {
   };
 
   // CREATE TABLE
-  const handleCreateTable = async (name: string) => {
-    await apiAction("/api/db/tables", "POST", { name });
+  const handleCreateTable = async (name: string, columns?: any[], rows?: any[]) => {
+    await apiAction("/api/db/tables", "POST", { name, columns, rows });
+  };
+
+  // RECREATE TABLE SCHEMA & DATA
+  const handleRecreateTable = async (tableId: string, columns: any[], rows: any[]) => {
+    await apiAction(`/api/db/tables/${tableId}/recreate`, "POST", { columns, rows });
   };
 
   // BACKUPS/SNAPSHOTS HANDLERS
@@ -241,7 +246,7 @@ export default function App() {
             </div>
 
             {/* Tab view controllers for Table, Kanban, Dictionary & User Admin */}
-            <div className="flex h-16 items-center space-x-6 border-l border-zinc-900 pl-8 select-none shrink-0" id="header-views-navbar">
+            <div className="flex h-16 items-center space-x-3 sm:space-x-5 border-l border-zinc-900 pl-4 sm:pl-6 select-none" id="header-views-navbar">
               {activeTable && (
                 <>
                   <button
@@ -252,9 +257,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-500 hover:text-zinc-300"
                     }`}
+                    title="Vista de Tabla SQL"
                   >
                     <Table className="w-3.5 h-3.5" />
-                    <span>Tabla DDL</span>
+                    <span className="hidden sm:inline">Tabla</span>
                   </button>
 
                   <button
@@ -265,9 +271,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-500 hover:text-zinc-300"
                     }`}
+                    title="Vista Kanban de Estado"
                   >
                     <Kanban className="w-3.5 h-3.5" />
-                    <span>Kanban</span>
+                    <span className="hidden sm:inline">Kanban</span>
                   </button>
 
                   {currentUser.role === "admin" && (
@@ -279,9 +286,10 @@ export default function App() {
                           ? "text-indigo-400 border-b-2 border-indigo-500"
                           : "text-zinc-500 hover:text-zinc-300"
                       }`}
+                      title="Diccionario DDL de Datos"
                     >
                       <BookOpen className="w-3.5 h-3.5" />
-                      <span>Diccionario (DDL)</span>
+                      <span className="hidden md:inline">Diccionario</span>
                     </button>
                   )}
 
@@ -293,9 +301,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-500 hover:text-zinc-300"
                     }`}
+                    title="Vista Calendario"
                   >
                     <Calendar className="w-3.5 h-3.5" />
-                    <span>Calendario</span>
+                    <span className="hidden sm:inline">Calendario</span>
                   </button>
                 </>
               )}
@@ -310,9 +319,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-500 hover:text-zinc-300"
                     }`}
+                    title="Control de Accesos y Privilegios"
                   >
                     <Users className="w-3.5 h-3.5" />
-                    <span>Control de Accesos</span>
+                    <span className="hidden md:inline">Accesos</span>
                   </button>
 
                   <button
@@ -323,9 +333,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-500 hover:text-zinc-300"
                     }`}
+                    title="Copias de Seguridad (Snapshots)"
                   >
                     <Archive className="w-3.5 h-3.5" />
-                    <span>Copias (Snapshots)</span>
+                    <span className="hidden md:inline">Copias</span>
                   </button>
                 </>
               )}
@@ -436,6 +447,7 @@ export default function App() {
                   onDeleteColumn={handleDeleteColumn}
                   onAddRow={handleAddRow}
                   onBulkAddRows={handleBulkAddRows}
+                  onRecreateTable={handleRecreateTable}
                   onUpdateRow={handleUpdateRow}
                   onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}

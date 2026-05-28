@@ -574,21 +574,53 @@ async function startServer() {
     }
 
     const currentUser = auth.user.name;
-    const { name } = req.body;
+    const { name, columns, rows } = req.body;
     if (!name || typeof name !== "string") {
       return res.status(400).json({ error: "El nombre de la tabla es obligatorio." });
     }
 
     const tableId = "tbl_" + Date.now();
+    let dbColumns = [
+      { id: "col_name", name: "Nombre", type: "text" }
+    ];
+    let dbRows = [
+      { id: "row_first", col_name: "Fila de ejemplo" }
+    ];
+
+    if (Array.isArray(columns) && columns.length > 0) {
+      dbColumns = columns.map((col: any) => ({
+        id: col.id || "col_" + Math.random().toString(36).substr(2, 9),
+        name: col.name || "Columna",
+        type: col.type || "text",
+        options: Array.isArray(col.options) ? col.options : undefined
+      }));
+
+      if (Array.isArray(rows)) {
+        dbRows = rows.map((row: any, rIdx: number) => {
+          const newRow: any = { id: row.id || "row_" + Date.now() + "_" + rIdx };
+          dbColumns.forEach((col: any) => {
+            const val = row[col.id];
+            if (col.type === "boolean") {
+              newRow[col.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
+            } else if (col.type === "number") {
+              newRow[col.id] = val !== undefined && val !== "" ? Number(val) : 0;
+              if (isNaN(newRow[col.id])) newRow[col.id] = 0;
+            } else {
+              newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
+            }
+          });
+          return newRow;
+        });
+      } else {
+        dbRows = [];
+      }
+    }
+
     const newTable: TableSchema = {
       id: tableId,
       name: name.trim(),
-      columns: [
-        { id: "col_name", name: "Nombre", type: "text" }
-      ],
-      rows: [
-        { id: "row_first", col_name: "Fila de ejemplo" }
-      ]
+      columns: dbColumns as any,
+      rows: dbRows
     };
 
     db.tables.push(newTable);
@@ -599,7 +631,69 @@ async function startServer() {
       action: "SCHEMA_CHANGE",
       tableId: tableId,
       tableName: newTable.name,
-      details: `Se creó la tabla '${newTable.name}' con la columna inicial 'Nombre'.`
+      details: `Se creó la tabla '${newTable.name}' con ${dbColumns.length} columnas en el esquema.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
+  // Recrear una tabla existente (importar estructura + datos)
+  app.post("/api/db/tables/:tableId/recreate", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede recrear estructuras de tabla por importación." });
+    }
+
+    const { tableId } = req.params;
+    const tableIndex = db.tables.findIndex(t => t.id === tableId);
+    if (tableIndex === -1) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    const { columns, rows } = req.body;
+    if (!Array.isArray(columns) || columns.length === 0) {
+      return res.status(400).json({ error: "El archivo para recrear debe contener al menos un campo/columna." });
+    }
+
+    const dbColumns = columns.map((col: any) => ({
+      id: col.id || "col_" + Math.random().toString(36).substr(2, 9),
+      name: col.name || "Columna",
+      type: col.type || "text",
+      options: Array.isArray(col.options) ? col.options : undefined
+    }));
+
+    const dbRows = Array.isArray(rows)
+      ? rows.map((row: any, rIdx: number) => {
+          const newRow: any = { id: row.id || "row_" + Date.now() + "_" + rIdx };
+          dbColumns.forEach((col: any) => {
+            const val = row[col.id];
+            if (col.type === "boolean") {
+              newRow[col.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1");
+            } else if (col.type === "number") {
+              newRow[col.id] = val !== undefined && val !== "" ? Number(val) : 0;
+              if (isNaN(newRow[col.id])) newRow[col.id] = 0;
+            } else {
+              newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
+            }
+          });
+          return newRow;
+        })
+      : [];
+
+    const existingTable = db.tables[tableIndex];
+    existingTable.columns = dbColumns as any;
+    existingTable.rows = dbRows;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: tableId,
+      tableName: existingTable.name,
+      details: `La tabla '${existingTable.name}' fue totalmente recreada/sobrescrita por importación de archivo (${dbColumns.length} columnas, ${dbRows.length} registros).`
     });
 
     saveDb(db);

@@ -1,12 +1,12 @@
 import React, { useState } from "react";
-import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User } from "lucide-react";
+import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet } from "lucide-react";
 import { TableSchema, AuditLog } from "../types";
 
 interface SidebarProps {
   tables: TableSchema[];
   activeTableId: string;
   onSelectTable: (id: string) => void;
-  onCreateTable: (name: string) => void;
+  onCreateTable: (name: string, columns?: any[], rows?: any[]) => void;
   onDeleteTable: (id: string) => void;
   logs: AuditLog[];
   readOnly?: boolean;
@@ -25,14 +25,136 @@ export default function Sidebar({
 }: SidebarProps) {
   const [newTableName, setNewTableName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [importMethod, setImportMethod] = useState<"none" | "csv" | "json">("none");
+  const [parsedColumns, setParsedColumns] = useState<any[] | undefined>(undefined);
+  const [parsedRows, setParsedRows] = useState<any[] | undefined>(undefined);
+  const [importSuccessMessage, setImportSuccessMessage] = useState("");
+
+  const resetFormStates = () => {
+    setNewTableName("");
+    setImportMethod("none");
+    setParsedColumns(undefined);
+    setParsedRows(undefined);
+    setImportSuccessMessage("");
+    setShowAddForm(false);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newTableName.trim()) {
-      onCreateTable(newTableName.trim());
-      setNewTableName("");
-      setShowAddForm(false);
+      onCreateTable(newTableName.trim(), parsedColumns, parsedRows);
+      resetFormStates();
     }
+  };
+
+  const parseCSVLine = (lineText: string): string[] => {
+    const result: string[] = [];
+    let insideQuote = false;
+    let entry = "";
+    for (let i = 0; i < lineText.length; i++) {
+      const char = lineText[i];
+      if (char === '"') {
+        if (insideQuote && lineText[i + 1] === '"') {
+          entry += '"';
+          i++; // Skip escaped quote
+        } else {
+          insideQuote = !insideQuote;
+        }
+      } else if (char === ',' && !insideQuote) {
+        result.push(entry.trim());
+        entry = "";
+      } else {
+        entry += char;
+      }
+    }
+    result.push(entry.trim());
+    return result;
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "csv" | "json") => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert("El archivo está vacío.");
+          return;
+        }
+
+        if (type === "json") {
+          const data = JSON.parse(text);
+          // Check if Complete structured table JSON or simple list array
+          if (data && data.columns && Array.isArray(data.columns)) {
+            if (data.name && !newTableName) {
+              setNewTableName(data.name);
+            }
+            setParsedColumns(data.columns);
+            setParsedRows(Array.isArray(data.rows) ? data.rows : []);
+            setImportSuccessMessage(`Estructura JSON: ${data.columns.length} campos y ${data.rows?.length || 0} registros listos.`);
+          } else {
+            const list = Array.isArray(data) ? data : [data];
+            if (list.length === 0) {
+              alert("El JSON no contiene filas válidas.");
+              return;
+            }
+            // Derive columns
+            const keys = Array.from(new Set(list.flatMap((o: any) => Object.keys(o))));
+            const columns = keys.map((k, idx) => ({
+              id: "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx,
+              name: k,
+              type: typeof list[0][k] === "number" ? "number" : typeof list[0][k] === "boolean" ? "boolean" : "text"
+            }));
+            const rows = list.map((o: any) => {
+              const rowWithColIds: any = {};
+              keys.forEach((k, idx) => {
+                const colId = "col_" + k.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + idx;
+                rowWithColIds[colId] = o[k] !== undefined && o[k] !== null ? o[k] : "";
+              });
+              return rowWithColIds;
+            });
+            setParsedColumns(columns);
+            setParsedRows(rows);
+            setImportSuccessMessage(`JSON de datos derivado: ${columns.length} columnas descubiertas y ${rows.length} registros listos.`);
+          }
+        } else if (type === "csv") {
+          const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+          if (lines.length === 0) {
+            alert("El archivo CSV no tiene líneas.");
+            return;
+          }
+          const rawHeaders = parseCSVLine(lines[0]);
+          const headers = rawHeaders.map((h, i) => {
+            const name = h.replace(/^\uFEFF/, "").trim();
+            return {
+              id: "col_" + name.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + i,
+              name: name || `Campo_${i + 1}`,
+              type: "text"
+            };
+          });
+
+          const rows: any[] = [];
+          for (let i = 1; i < lines.length; i++) {
+            const cellVals = parseCSVLine(lines[i]);
+            if (cellVals.length === 0 || (cellVals.length === 1 && cellVals[0] === "")) continue;
+            const rowObj: any = {};
+            headers.forEach((h, colIdx) => {
+              rowObj[h.id] = cellVals[colIdx] !== undefined ? cellVals[colIdx] : "";
+            });
+            rows.push(rowObj);
+          }
+
+          setParsedColumns(headers);
+          setParsedRows(rows);
+          setImportSuccessMessage(`CSV parseado: ${headers.length} campos y ${rows.length} registros listos.`);
+        }
+      } catch (err: any) {
+        alert("Ocurrió un error al procesar el archivo: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
   };
 
   // Local DB style stats calculations
@@ -85,30 +207,120 @@ export default function Sidebar({
           </div>
 
           {showAddForm && (
-            <form onSubmit={handleSubmit} className="mb-4 p-3 bg-zinc-900/40 border border-zinc-800/80 rounded-xl space-y-2 animate-in slide-in-from-top-1" id="schema-table-form">
-              <input
-                type="text"
-                required
-                placeholder="Nombre de la tabla..."
-                value={newTableName}
-                onChange={(e) => setNewTableName(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg text-xs p-2 text-zinc-100 outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
-              />
-              <div className="flex items-center justify-end gap-1.5">
+            <form onSubmit={handleSubmit} className="mb-4 p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-3.5 animate-in slide-in-from-top-1 shadow-lg" id="schema-table-form">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide font-mono">Nombre de la Tabla</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Por ej. Productos, Clientes..."
+                  value={newTableName}
+                  onChange={(e) => setNewTableName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-850 rounded-lg text-xs p-2 text-zinc-100 outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
+                />
+              </div>
+
+              {/* Import Options */}
+              <div className="space-y-2 pt-1 border-t border-zinc-900">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide font-mono block">Importar Datos (Opcional)</label>
+                <div className="grid grid-cols-3 gap-1" id="schema-import-method-selector">
+                  <button
+                    type="button"
+                    onClick={() => { setImportMethod("none"); setParsedColumns(undefined); setParsedRows(undefined); setImportSuccessMessage(""); }}
+                    className={`px-1 py-1.5 rounded-md text-[10px] font-sans font-semibold border cursor-pointer text-center select-none transition-all ${
+                      importMethod === "none"
+                        ? "bg-zinc-805 border-zinc-700 text-zinc-100"
+                        : "bg-transparent border-transparent text-zinc-500 hover:text-zinc-350"
+                    }`}
+                  >
+                    Ninguno
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setImportMethod("csv"); setParsedColumns(undefined); setParsedRows(undefined); setImportSuccessMessage(""); }}
+                    className={`px-1 py-1.5 rounded-md text-[10px] font-sans font-semibold border cursor-pointer text-center select-none transition-all ${
+                      importMethod === "csv"
+                        ? "bg-zinc-805 border-zinc-700 text-zinc-100"
+                        : "bg-transparent border-transparent text-zinc-500 hover:text-zinc-350"
+                    }`}
+                  >
+                    CSV (Excel)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setImportMethod("json"); setParsedColumns(undefined); setParsedRows(undefined); setImportSuccessMessage(""); }}
+                    className={`px-1 py-1.5 rounded-md text-[10px] font-sans font-semibold border cursor-pointer text-center select-none transition-all ${
+                      importMethod === "json"
+                        ? "bg-zinc-805 border-zinc-700 text-zinc-100"
+                        : "bg-transparent border-transparent text-zinc-500 hover:text-zinc-350"
+                    }`}
+                  >
+                    JSON
+                  </button>
+                </div>
+              </div>
+
+              {/* File Inputs based on importMethod */}
+              {importMethod === "csv" && (
+                <div className="p-2.5 bg-zinc-950 border border-zinc-900 rounded-lg text-center" id="csv-uploader-zone">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={(e) => handleFileUpload(e, "csv")}
+                    id="sidebar-csv-file-input"
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="sidebar-csv-file-input"
+                    className="flex flex-col items-center justify-center gap-1.5 py-1 text-[11px] text-zinc-400 hover:text-indigo-400 cursor-pointer transition-all"
+                  >
+                    <Upload className="w-4 h-4 text-zinc-500" />
+                    <span className="font-semibold">Subir archivo .csv</span>
+                  </label>
+                </div>
+              )}
+
+              {importMethod === "json" && (
+                <div className="p-2.5 bg-zinc-950 border border-zinc-900 rounded-lg text-center" id="json-uploader-zone">
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={(e) => handleFileUpload(e, "json")}
+                    id="sidebar-json-file-input"
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="sidebar-json-file-input"
+                    className="flex flex-col items-center justify-center gap-1.5 py-1 text-[11px] text-zinc-400 hover:text-indigo-400 cursor-pointer transition-all"
+                  >
+                    <Upload className="w-4 h-4 text-zinc-500" />
+                    <span className="font-semibold">Subir archivo .json</span>
+                  </label>
+                </div>
+              )}
+
+              {/* Parsed Success Summary */}
+              {importSuccessMessage && (
+                <p className="text-[10px] text-emerald-400 font-mono font-medium leading-relaxed bg-emerald-500/5 border border-emerald-500/10 p-2 rounded-lg">
+                  ✓ {importSuccessMessage}
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-zinc-900">
                 <button
                   type="button"
-                  onClick={() => setShowAddForm(false)}
-                  className="px-2 py-1 bg-zinc-800 text-zinc-400 rounded-md text-[10px] hover:text-zinc-200 cursor-pointer"
+                  onClick={resetFormStates}
+                  className="px-2.5 py-1 bg-zinc-800 text-zinc-400 rounded-lg text-[10px] font-semibold hover:text-zinc-200 cursor-pointer"
                   id="btn-cancel-add-table"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-md text-[10px] cursor-pointer"
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-[10px] cursor-pointer"
                   id="btn-submit-add-table"
                 >
-                  Crear Tabla
+                  {parsedColumns ? "Crear e Importar" : "Crear Tabla"}
                 </button>
               </div>
             </form>
