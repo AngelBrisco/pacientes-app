@@ -123,10 +123,10 @@ function getInitialDbState(): DbState {
         permissions: "read-write"
       },
       {
-        id: "usr_angel",
-        username: "angel",
-        name: "Ángel Brisco",
-        password: "angel123",
+        id: "usr_colaborador",
+        username: "colaborador",
+        name: "Colaborador de Prueba",
+        password: "colaborador123",
         role: "user",
         permissions: "read-write"
       },
@@ -158,10 +158,10 @@ function loadDb(): DbState {
             permissions: "read-write"
           },
           {
-            id: "usr_angel",
-            username: "angel",
-            name: "Ángel Brisco",
-            password: "angel123",
+            id: "usr_colaborador",
+            username: "colaborador",
+            name: "Colaborador de Prueba",
+            password: "colaborador123",
             role: "user",
             permissions: "read-write"
           },

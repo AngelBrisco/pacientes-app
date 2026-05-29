@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { UserAccount, TableSchema } from "../types";
 import { 
   Users, UserPlus, Trash2, Key, Sparkles, Shield, Eye, Lock, 
-  Settings, UserCheck, AlertOctagon, HelpCircle, Table 
+  Settings, UserCheck, AlertOctagon, HelpCircle, Table, Edit2, Save, X
 } from "lucide-react";
 
 interface UserManagementViewProps {
@@ -23,6 +23,59 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
   const [permissions, setPermissions] = useState<'read-write' | 'read-only'>("read-write");
   
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingPassword, setEditingPassword] = useState("");
+
+  const startEditing = (u: UserAccount) => {
+    setEditingUserId(u.id);
+    setEditingName(u.name);
+    setEditingPassword(u.password || "");
+  };
+
+  const handleSaveEdit = async (userId: string) => {
+    if (!editingName.trim()) {
+      alert("El nombre no puede estar vacío.");
+      return;
+    }
+    if (!editingPassword) {
+      alert("La contraseña no puede estar vacía.");
+      return;
+    }
+
+    try {
+      const u = users.find(x => x.id === userId);
+      if (!u) return;
+
+      const res = await fetch(`/api/users/${userId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-username": currentUser.username
+        },
+        body: JSON.stringify({
+          name: editingName.trim(),
+          password: editingPassword,
+          role: u.role,
+          permissions: u.permissions,
+          allowedTables: u.allowedTables
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Error al actualizar usuario.");
+      }
+
+      const updated: UserAccount[] = await res.json();
+      setUsers(updated);
+      setEditingUserId(null);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error al actualizar usuario: ${err.message}`);
+    }
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -295,6 +348,7 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
                     {users.map((u) => {
                       const isMainAdmin = u.username === "admin";
                       const isExpanded = expandedUserId === u.id;
+                      const isEditing = editingUserId === u.id;
                       
                       // Calculate active tables count descriptive label
                       let tablesAllowedText = "Todas las tablas";
@@ -306,23 +360,36 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
 
                       return (
                         <React.Fragment key={u.id}>
-                          <tr className="row-hover" id={`user-row-${u.id}`}>
+                          <tr className={`row-hover ${isEditing ? "bg-zinc-900/40" : ""}`} id={`user-row-${u.id}`}>
                             <td className="py-3 pr-2">
-                              <div className="space-y-0.5">
-                                <span className="font-bold text-zinc-200 block">{u.name}</span>
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <code className="text-indigo-400 font-mono text-[10.5px]">@{u.username}</code>
-                                  <span className="text-[9px] text-zinc-500 bg-zinc-950 px-1 rounded-sm flex items-center gap-1">
-                                    <Table className="w-2.5 h-2.5 text-zinc-550" />
-                                    {tablesAllowedText}
-                                  </span>
+                              {isEditing ? (
+                                <div className="space-y-2">
+                                  <input
+                                    type="text"
+                                    value={editingName}
+                                    onChange={(e) => setEditingName(e.target.value)}
+                                    className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200 outline-none focus:ring-1 focus:ring-indigo-500 w-full"
+                                    placeholder="Nombre"
+                                  />
+                                  <code className="text-zinc-500 font-mono text-[10.5px]">@{u.username}</code>
                                 </div>
-                              </div>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="font-bold text-zinc-200 block">{u.name}</span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <code className="text-indigo-400 font-mono text-[10.5px]">@{u.username}</code>
+                                    <span className="text-[9px] text-zinc-500 bg-zinc-950 px-1 rounded-sm flex items-center gap-1">
+                                      <Table className="w-2.5 h-2.5 text-zinc-550" />
+                                      {tablesAllowedText}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
                             </td>
                             <td className="py-3">
                               <select
                                 value={u.role}
-                                disabled={isMainAdmin}
+                                disabled={isMainAdmin || isEditing}
                                 onChange={(e) => handleUpdatePermissions(u.id, u.permissions, e.target.value as any)}
                                 className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-350 cursor-pointer focus:ring-1 focus:ring-indigo-500"
                               >
@@ -333,7 +400,7 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
                             <td className="py-3">
                               <select
                                 value={u.permissions}
-                                disabled={isMainAdmin}
+                                disabled={isMainAdmin || isEditing}
                                 onChange={(e) => handleUpdatePermissions(u.id, e.target.value as any, u.role)}
                                 className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-350 cursor-pointer focus:ring-1 focus:ring-indigo-500"
                               >
@@ -342,7 +409,15 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
                               </select>
                             </td>
                             <td className="py-3 font-mono text-zinc-500">
-                              {u.password ? (
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  value={editingPassword}
+                                  onChange={(e) => setEditingPassword(e.target.value)}
+                                  className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200 font-mono outline-none focus:ring-1 focus:ring-indigo-500 w-32"
+                                  placeholder="Clave"
+                                />
+                              ) : u.password ? (
                                 <span className="bg-zinc-950 border border-zinc-900 px-2 py-1 rounded text-[11px] text-zinc-400 font-semibold select-all">
                                   {u.password}
                                 </span>
@@ -352,28 +427,57 @@ export default function UserManagementView({ currentUser, tables = [] }: UserMan
                             </td>
                             <td className="py-3 text-right">
                               <div className="flex items-center justify-end gap-1.5">
-                                <button
-                                  disabled={isMainAdmin || u.role === "admin"}
-                                  onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
-                                  className={`p-1 rounded cursor-pointer transition-all ${
-                                    isExpanded 
-                                      ? "text-indigo-400 bg-indigo-500/10 border border-indigo-500/20" 
-                                      : "text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/60"
-                                  } disabled:opacity-20 disabled:cursor-not-allowed`}
-                                  title={isMainAdmin || u.role === "admin" ? "Administradores tienen acceso sin filtro" : "Configurar acceso a tabas físicas"}
-                                  id={`btn-config-tables-user-${u.id}`}
-                                >
-                                  <Shield className="w-4 h-4" />
-                                </button>
-                                <button
-                                  disabled={isMainAdmin}
-                                  onClick={() => handleDeleteUser(u.id)}
-                                  className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                                  title={isMainAdmin ? "No se puede eliminar el administrador principal" : "Eliminar cuenta"}
-                                  id={`btn-del-user-${u.id}`}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                {isEditing ? (
+                                  <>
+                                    <button
+                                      onClick={() => handleSaveEdit(u.id)}
+                                      className="p-1 rounded text-emerald-400 hover:bg-emerald-500/10 transition-all cursor-pointer"
+                                      title="Confirmar cambios"
+                                    >
+                                      <Save className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingUserId(null)}
+                                      className="p-1 rounded text-zinc-400 hover:bg-zinc-850 transition-all cursor-pointer"
+                                      title="Cancelar"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      onClick={() => startEditing(u)}
+                                      className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/60 transition-all cursor-pointer"
+                                      title="Editar nombre o clave"
+                                      id={`btn-edit-user-${u.id}`}
+                                    >
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      disabled={isMainAdmin || u.role === "admin"}
+                                      onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
+                                      className={`p-1 rounded cursor-pointer transition-all ${
+                                        isExpanded 
+                                          ? "text-indigo-400 bg-indigo-500/10 border border-indigo-500/20" 
+                                          : "text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/60"
+                                      } disabled:opacity-20 disabled:cursor-not-allowed`}
+                                      title={isMainAdmin || u.role === "admin" ? "Administradores tienen acceso sin filtro" : "Configurar acceso a tabas físicas"}
+                                      id={`btn-config-tables-user-${u.id}`}
+                                    >
+                                      <Shield className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      disabled={isMainAdmin}
+                                      onClick={() => handleDeleteUser(u.id)}
+                                      className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                      title={isMainAdmin ? "No se puede eliminar el administrador principal" : "Eliminar cuenta"}
+                                      id={`btn-del-user-${u.id}`}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             </td>
                           </tr>
