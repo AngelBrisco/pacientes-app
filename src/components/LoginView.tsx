@@ -123,33 +123,7 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
           </button>
         </form>
 
-        {/* Credenciales de Prueba (Help Panel) */}
-        <div className="border-t border-zinc-800/80 pt-4 space-y-2">
-          <div className="flex items-center gap-1 text-[10px] text-zinc-500 font-mono font-bold uppercase tracking-wider">
-            <Terminal className="w-3.5 h-3.5 text-indigo-400" /> Credenciales por Default
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] font-mono leading-relaxed text-zinc-400">
-            <div className="p-2 bg-[#09090b]/40 rounded-lg border border-zinc-800/60 flex flex-col justify-between">
-              <span className="text-indigo-400 font-bold uppercase text-[9.5px]">Admin</span>
-              <span>usr: <strong className="text-zinc-300">admin</strong></span>
-              <span>pass: <strong className="text-zinc-300">admin123</strong></span>
-              <span className="text-[8.5px] text-emerald-400 mt-0.5">Rol: admin (total)</span>
-            </div>
-            <div className="p-2 bg-[#09090b]/40 rounded-lg border border-zinc-800/60 flex flex-col justify-between">
-              <span className="text-indigo-400 font-bold uppercase text-[9.5px]">Ángel</span>
-              <span>usr: <strong className="text-zinc-300">angel</strong></span>
-              <span>pass: <strong className="text-zinc-300">angel123</strong></span>
-              <span className="text-[8.5px] text-emerald-400 mt-0.5">Rol: read-write</span>
-            </div>
-            <div className="p-2 bg-[#09090b]/40 rounded-lg border border-zinc-800/60 flex flex-col justify-between">
-              <span className="text-indigo-400 font-bold uppercase text-[9.5px]">QA</span>
-              <span>usr: <strong className="text-zinc-300">qa</strong></span>
-              <span>pass: <strong className="text-zinc-300">qa123</strong></span>
-              <span className="text-[8.5px] text-amber-500 mt-0.5">Rol: read-only</span>
-            </div>
-          </div>
-        </div>
+
 
       </div>
     </div>

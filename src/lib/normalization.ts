@@ -98,10 +98,13 @@ export function normalizeImportedTableJson(data: any): NormalizedData {
     }
 
     const colName = String(col.name || col.title || col.label || `Campo ${idx + 1}`).trim();
+    const cleanColName = colName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
     let type: ColumnType = "text";
     const rawType = String(col.type || "").toLowerCase();
-    if (rawType === "selection" || rawType === "select") {
+    if (cleanColName === "laboratorio" || cleanColName.includes("laboratorio")) {
+      type = "file";
+    } else if (rawType === "selection" || rawType === "select") {
       type = "select";
     } else if (rawType === "datetime" || rawType === "date" || rawType === "time") {
       type = "date";
@@ -196,6 +199,23 @@ export function normalizeImportedTableJson(data: any): NormalizedData {
         } else {
           const num = Number(val);
           cleanRow[cleanCol.id] = isNaN(num) ? "" : num;
+        }
+      } else if (cleanCol.type === "file") {
+        if (Array.isArray(val)) {
+          cleanRow[cleanCol.id] = val;
+        } else if (val !== undefined && val !== null) {
+          const strVal = String(val).trim();
+          if (strVal.startsWith("[") && strVal.endsWith("]")) {
+            try {
+              cleanRow[cleanCol.id] = JSON.parse(strVal);
+            } catch (e) {
+              cleanRow[cleanCol.id] = strVal ? [strVal] : [];
+            }
+          } else {
+            cleanRow[cleanCol.id] = strVal ? [strVal] : [];
+          }
+        } else {
+          cleanRow[cleanCol.id] = [];
         }
       } else {
         cleanRow[cleanCol.id] = val !== undefined && val !== null ? String(val) : "";

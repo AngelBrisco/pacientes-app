@@ -848,7 +848,7 @@ export default function TableView({
                                   ? JSON.parse(value) 
                                   : value ? [String(value)] : [];
                               if (filesArr.length === 0) {
-                                return <span className="text-zinc-655 italic font-mono text-[10.5px]">- (sin adjuntos)</span>;
+                                return <span className="text-zinc-500 italic font-mono text-[10.5px]">- (sin adjuntos)</span>;
                               }
                               return (
                                 <div className="flex items-center gap-1.5 flex-wrap overflow-hidden max-w-full">

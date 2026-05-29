@@ -439,33 +439,36 @@ export default function Sidebar({
       </div>
 
       {/* Database Metadata Info Card */}
-      <div className="p-4 border-t border-zinc-900 bg-zinc-950/80" id="sidebar-meta-card">
-        <div className="p-3.5 bg-zinc-900 border border-zinc-800/80 rounded-xl space-y-2.5 shadow-sm">
-          <h4 className="font-mono text-[9px] uppercase font-bold tracking-widest text-zinc-400 flex items-center gap-1">
-            <Terminal className="w-3 h-3 text-indigo-400" /> Relational Node Stats
-          </h4>
-          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-zinc-500">
-            <div>
-              <span className="block text-zinc-300 font-bold">{tables.length}</span>
-              <span>Tablas Físicas</span>
-            </div>
-            <div>
-              <span className="block text-zinc-300 font-bold">{totalColumns}</span>
-              <span>Campos (Cols)</span>
-            </div>
-            <div>
-              <span className="block text-zinc-300 font-bold">{totalRows}</span>
-              <span>Filas (Rows)</span>
-            </div>
-            <div>
-              <span className="block text-indigo-400 flex items-center gap-0.5 font-bold">
-                <ShieldCheck className="w-3 h-3 text-indigo-400" /> ONLINE
-              </span>
-              <span>Port Bind 3000</span>
+      {isAdmin && (
+        <div className="p-4 border-t border-zinc-900 bg-zinc-950/80" id="sidebar-meta-card">
+          <div className="p-3.5 bg-zinc-900 border border-zinc-800/80 rounded-xl space-y-2.5 shadow-sm">
+            <h4 className="font-mono text-[9px] uppercase font-bold tracking-widest text-zinc-400 flex items-center gap-1">
+              <Terminal className="w-3 h-3 text-indigo-400" /> Relational Node Stats
+            </h4>
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-zinc-500">
+              <div>
+                <span className="block text-zinc-300 font-bold">{tables.length}</span>
+                <span>Tablas Físicas</span>
+              </div>
+              <div>
+                <span className="block text-zinc-300 font-bold">{totalColumns}</span>
+                <span>Campos (Cols)</span>
+              </div>
+              <div>
+                <span className="block text-zinc-300 font-bold">{totalRows}</span>
+                <span>Filas (Rows)</span>
+              </div>
+              <div>
+                <span className="block text-indigo-400 flex items-center gap-0.5 font-bold">
+                  <ShieldCheck className="w-3 h-3 text-indigo-400" /> ONLINE
+                </span>
+                <span>Port Bind 3000</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
     </aside>
   );
 }

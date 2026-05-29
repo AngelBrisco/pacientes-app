@@ -471,33 +471,35 @@ export default function App() {
         </div>
 
         {/* Global DDBB Live Console Footer Status bar */}
-        <footer id="console-footer-statusbar" className="h-10 border-t border-zinc-900 bg-[#09090b]/90 px-6 flex items-center justify-between text-[10px] text-zinc-500 shrink-0 select-none">
-          <div className="flex gap-4 items-center">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping-once border border-emerald-500/20"></span>
-              Container ID: <span className="text-emerald-500 font-mono font-bold">nococlone_app_node_1</span>
-            </span>
-            <span className="text-zinc-700">|</span>
-            <span className="flex items-center gap-1 font-mono">
-              <Clock className="w-3 h-3 text-zinc-650" /> SQL Core Client Stable
-            </span>
-          </div>
+        {currentUser.role === "admin" && (
+          <footer id="console-footer-statusbar" className="h-10 border-t border-zinc-900 bg-[#09090b]/90 px-6 flex items-center justify-between text-[10px] text-zinc-500 shrink-0 select-none">
+            <div className="flex gap-4 items-center">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping-once border border-emerald-500/20"></span>
+                Container ID: <span className="text-emerald-500 font-mono font-bold">nococlone_app_node_1</span>
+              </span>
+              <span className="text-zinc-700">|</span>
+              <span className="flex items-center gap-1 font-mono">
+                <Clock className="w-3 h-3 text-zinc-650" /> SQL Core Client Stable
+              </span>
+            </div>
 
-          <div className="flex items-center gap-5">
-            {currentUser.permissions === "read-write" && (
-              <button
-                onClick={handleResetDb}
-                className="text-[10px] font-mono font-bold text-zinc-400 hover:text-indigo-400 transition-all cursor-pointer bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5"
-                title="Restaurar toda la BD relacional"
-                id="btn-bottom-restore-preset"
-              >
-                🔄 Rebuild DB Preset
-              </button>
-            )}
-            <span className="text-zinc-700 animate-pulse select-none">•</span>
-            <span className="font-mono text-indigo-400/80 uppercase font-semibold">Local v1.0.4-stable</span>
-          </div>
-        </footer>
+            <div className="flex items-center gap-5">
+              {currentUser.permissions === "read-write" && (
+                <button
+                  onClick={handleResetDb}
+                  className="text-[10px] font-mono font-bold text-zinc-400 hover:text-indigo-400 transition-all cursor-pointer bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5"
+                  title="Restaurar toda la BD relacional"
+                  id="btn-bottom-restore-preset"
+                >
+                  🔄 Rebuild DB Preset
+                </button>
+              )}
+              <span className="text-zinc-700 animate-pulse select-none">•</span>
+              <span className="font-mono text-indigo-400/80 uppercase font-semibold">Local v1.0.4-stable</span>
+            </div>
+          </footer>
+        )}
 
       </main>
     </div>

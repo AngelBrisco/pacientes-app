@@ -624,6 +624,23 @@ async function startServer() {
                 const num = Number(val);
                 newRow[col.id] = isNaN(num) ? "" : num;
               }
+            } else if (col.type === "file") {
+              if (Array.isArray(val)) {
+                newRow[col.id] = val;
+              } else if (val !== undefined && val !== null) {
+                const strVal = String(val).trim();
+                if (strVal.startsWith("[") && strVal.endsWith("]")) {
+                  try {
+                    newRow[col.id] = JSON.parse(strVal);
+                  } catch (e) {
+                    newRow[col.id] = strVal ? [strVal] : [];
+                  }
+                } else {
+                  newRow[col.id] = strVal ? [strVal] : [];
+                }
+              } else {
+                newRow[col.id] = [];
+              }
             } else {
               newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
             }
@@ -711,6 +728,23 @@ async function startServer() {
               } else {
                 const num = Number(val);
                 newRow[col.id] = isNaN(num) ? "" : num;
+              }
+            } else if (col.type === "file") {
+              if (Array.isArray(val)) {
+                newRow[col.id] = val;
+              } else if (val !== undefined && val !== null) {
+                const strVal = String(val).trim();
+                if (strVal.startsWith("[") && strVal.endsWith("]")) {
+                  try {
+                    newRow[col.id] = JSON.parse(strVal);
+                  } catch (e) {
+                    newRow[col.id] = strVal ? [strVal] : [];
+                  }
+                } else {
+                  newRow[col.id] = strVal ? [strVal] : [];
+                }
+              } else {
+                newRow[col.id] = [];
               }
             } else {
               newRow[col.id] = val !== undefined && val !== null ? String(val) : "";
@@ -922,6 +956,23 @@ async function startServer() {
         } else if (col.type === "number") {
           val = val !== undefined && val !== "" ? Number(val) : 0;
           if (isNaN(val)) val = 0;
+        } else if (col.type === "file") {
+          if (Array.isArray(val)) {
+            val = val;
+          } else if (val !== undefined && val !== null) {
+            const strVal = String(val).trim();
+            if (strVal.startsWith("[") && strVal.endsWith("]")) {
+              try {
+                val = JSON.parse(strVal);
+              } catch (e) {
+                val = strVal ? [strVal] : [];
+              }
+            } else {
+              val = strVal ? [strVal] : [];
+            }
+          } else {
+            val = [];
+          }
         } else {
           val = val !== undefined && val !== null ? String(val) : "";
         }
