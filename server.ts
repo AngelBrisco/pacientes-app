@@ -917,6 +917,58 @@ async function startServer() {
     res.json(db);
   });
 
+  // Modificar una columna existente (Nombre, tipo, opciones, varcharLength)
+  app.put("/api/db/tables/:tableId/columns/:columnId", (req, res) => {
+    const db = loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede gestionar columnas." });
+    }
+
+    const currentUser = auth.user.name;
+    const { tableId, columnId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const { name, type, options, varcharLength } = req.body;
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    const col = table.columns.find(c => c.id === columnId);
+    if (!col) {
+      return res.status(404).json({ error: "Columna no encontrada." });
+    }
+
+    const prevName = col.name;
+    const prevType = col.type;
+
+    if (name) col.name = name.trim();
+    if (type) col.type = type;
+    if (options !== undefined) col.options = Array.isArray(options) ? options : undefined;
+    if (varcharLength !== undefined) {
+      const len = Number(varcharLength);
+      col.varcharLength = isNaN(len) || len <= 0 ? 50 : len;
+    }
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: currentUser,
+      action: "SCHEMA_CHANGE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Se modificó la columna '${prevName}' (tipo: ${prevType}) a '${col.name}' (tipo: ${col.type}) en la tabla '${table.name}'.`
+    });
+
+    saveDb(db);
+    res.json(db);
+  });
+
   // API de Carga Masiva de Filas (Importación CSV)
   app.post("/api/db/tables/:tableId/bulk-rows", (req, res) => {
     const db = loadDb();

@@ -5,6 +5,7 @@ export interface Column {
   name: string;
   type: ColumnType;
   options?: string[]; // Used if type is 'select'
+  varcharLength?: number; // Custom varchar length (mostly for select / varchar types)
 }
 
 export interface Row {

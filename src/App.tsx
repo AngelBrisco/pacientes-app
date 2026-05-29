@@ -175,6 +175,12 @@ export default function App() {
     await apiAction(`/api/db/tables/${activeTableId}/columns/${columnId}`, "DELETE");
   };
 
+  // EDIT COLUMN
+  const handleEditColumn = async (columnId: string, name: string, type: ColumnType, options?: string[], varcharLength?: number) => {
+    if (!activeTableId) return;
+    await apiAction(`/api/db/tables/${activeTableId}/columns/${columnId}`, "PUT", { name, type, options, varcharLength });
+  };
+
   // ADD ROW (INSERT)
   const handleAddRow = async (rowData: Record<string, any>) => {
     if (!activeTableId) return;
@@ -463,7 +469,9 @@ export default function App() {
                 />
               )}
 
-              {activeView === "dictionary" && currentUser.role === "admin" && <DictionaryView table={activeTable} />}
+              {activeView === "dictionary" && currentUser.role === "admin" && (
+                <DictionaryView table={activeTable} onEditColumn={handleEditColumn} />
+              )}
 
               {activeView === "calendar" && <CalendarView table={activeTable} />}
             </div>

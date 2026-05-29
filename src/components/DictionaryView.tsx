@@ -1,13 +1,68 @@
 import React, { useState } from "react";
-import { TableSchema, Column } from "../types";
-import { BookOpen, Key, Hash, HelpCircle, HardDrive, Cpu, Terminal, FileJson, AlertCircle } from "lucide-react";
+import { TableSchema, Column, ColumnType } from "../types";
+import { 
+  BookOpen, Key, Hash, HelpCircle, HardDrive, Cpu, Terminal, FileJson, 
+  AlertCircle, Edit2, Save, X, Plus, Settings 
+} from "lucide-react";
 
 interface DictionaryViewProps {
   table: TableSchema;
+  onEditColumn: (columnId: string, name: string, type: ColumnType, options?: string[], varcharLength?: number) => Promise<void>;
 }
 
-export default function DictionaryView({ table }: DictionaryViewProps) {
+export default function DictionaryView({ table, onEditColumn }: DictionaryViewProps) {
   const [selectedRowId, setSelectedRowId] = useState<string>("");
+
+  // Edit Column State
+  const [editingColId, setEditingColId] = useState<string | null>(null);
+  const [editName, setEditName] = useState<string>("");
+  const [editType, setEditType] = useState<ColumnType>("text");
+  const [editOptions, setEditOptions] = useState<string[]>([]);
+  const [editVarcharLength, setEditVarcharLength] = useState<number>(50);
+  const [newOptionText, setNewOptionText] = useState<string>("");
+
+  const handleStartEdit = (col: Column) => {
+    setEditingColId(col.id);
+    setEditName(col.name);
+    setEditType(col.type);
+    setEditOptions(col.options || []);
+    setEditVarcharLength(col.varcharLength || 50);
+    setNewOptionText("");
+  };
+
+  const handleAddOption = () => {
+    const trimmed = newOptionText.trim();
+    if (!trimmed) return;
+    if (editOptions.includes(trimmed)) {
+      alert("La opción ya existe en las restricciones CHECK.");
+      return;
+    }
+    setEditOptions([...editOptions, trimmed]);
+    setNewOptionText("");
+  };
+
+  const handleRemoveOption = (opt: string) => {
+    setEditOptions(editOptions.filter(o => o !== opt));
+  };
+
+  const handleSave = async (colId: string) => {
+    if (!editName.trim()) {
+      alert("El nombre de la columna es un campo obligatorio.");
+      return;
+    }
+    try {
+      await onEditColumn(
+        colId, 
+        editName, 
+        editType, 
+        editType === "select" ? editOptions : undefined, 
+        editType === "select" ? editVarcharLength : undefined
+      );
+      setEditingColId(null);
+    } catch (err: any) {
+      alert(`Error al guardar columna: ${err.message}`);
+    }
+  };
 
   // Auto-select first row if exists
   const activeRowId = selectedRowId || (table.rows && table.rows[0]?.id) || "";
@@ -32,7 +87,7 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
       case "date":
         return "DATE";
       case "select":
-        return `VARCHAR(50) CHECK (${col.name.toLowerCase()} IN (${(col.options || [])
+        return `VARCHAR(${col.varcharLength || 50}) CHECK (${col.name.toLowerCase()} IN (${(col.options || [])
           .map((o) => `'${o}'`)
           .join(", ")}))`;
       case "text":
@@ -66,13 +121,151 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
             <div className="space-y-3" id="columns-dictionary-list">
               {table.columns.map((col, idx) => {
                 const isPrimaryKey = idx === 0;
+                const isEditing = editingColId === col.id;
+
+                if (isEditing) {
+                  return (
+                    <div
+                      key={col.id}
+                      className="p-4 bg-zinc-950 border border-indigo-500/30 rounded-xl space-y-4 shadow-sm animate-in fade-in zoom-in-95 duration-150"
+                      id={`dict-col-edit-${col.id}`}
+                    >
+                      <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+                        <span className="text-[10px] font-mono font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-1">
+                          <Settings className="w-3.5 h-3.5 text-indigo-400" /> Configuración de Restricciones ({col.id})
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleSave(col.id)}
+                            className="px-2.5 py-1 text-[11px] font-mono font-bold text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
+                          >
+                            <Save className="w-3 h-3" /> Guardar
+                          </button>
+                          <button
+                            onClick={() => setEditingColId(null)}
+                            className="px-2.5 py-1 text-[11px] font-mono font-bold text-zinc-400 bg-zinc-800 hover:bg-zinc-750 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
+                          >
+                            <X className="w-3 h-3" /> Cancelar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Name & Type */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase font-mono text-zinc-500 font-bold block">Nombre de Columna:</label>
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase font-mono text-zinc-500 font-bold block">Tipo de Datos Mapeado:</label>
+                          <select
+                            value={editType}
+                            onChange={(e) => setEditType(e.target.value as ColumnType)}
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            <option value="text">TEXT (VARCHAR)</option>
+                            <option value="number">NUMBER (NUMERIC)</option>
+                            <option value="boolean">BOOLEAN</option>
+                            <option value="date">DATE</option>
+                            <option value="select">SELECT / ENUM (CONSTRAINTS)</option>
+                            <option value="file">FILE (Adjuntos / PDF)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {editType === "select" && (
+                        <div className="space-y-4 bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800/80 animate-in slide-in-from-top-2 duration-200">
+                          {/* Custom size (character limit N) */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] uppercase font-mono text-zinc-400 font-bold flex items-center gap-1">
+                              Ancho Físico varchar(N): <span className="text-zinc-500 font-normal normal-case">(Límite de caracteres)</span>
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min="1"
+                                max="4000"
+                                value={editVarcharLength}
+                                onChange={(e) => setEditVarcharLength(Math.max(1, parseInt(e.target.value) || 1))}
+                                className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <span className="text-xs text-zinc-500 font-mono">caracteres</span>
+                            </div>
+                          </div>
+
+                          {/* Options check list constraints */}
+                          <div className="space-y-2">
+                            <label className="text-[10px] uppercase font-mono text-zinc-400 font-bold block">
+                              Valores Permitidos para la opción check (IN List):
+                            </label>
+                            
+                            {/* Present tag lists */}
+                            <div className="flex flex-wrap gap-1.5">
+                              {editOptions.length === 0 ? (
+                                <span className="text-xs italic text-zinc-500 font-sans">- No hay restricciones definidas. Añade alguna opción.</span>
+                              ) : (
+                                editOptions.map((opt) => (
+                                  <span
+                                    key={opt}
+                                    className="flex items-center gap-1.5 text-xs text-indigo-300 bg-indigo-500/10 px-2.5 py-1 rounded-lg border border-indigo-500/20 font-sans"
+                                  >
+                                    {opt}
+                                    <button
+                                      onClick={() => handleRemoveOption(opt)}
+                                      className="text-zinc-500 hover:text-rose-400 cursor-pointer text-[10px]"
+                                      type="button"
+                                      title="Quitar"
+                                    >
+                                      ✕
+                                    </button>
+                                  </span>
+                                ))
+                              )}
+                            </div>
+
+                            {/* Trigger addition form */}
+                            <div className="flex items-center gap-1.5 mt-2">
+                              <input
+                                type="text"
+                                value={newOptionText}
+                                onChange={(e) => setNewOptionText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleAddOption();
+                                  }
+                                }}
+                                className="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 outline-none focus:ring-1 focus:ring-indigo-500"
+                                placeholder="Ej: Prequirurgicos complejos"
+                              />
+                              <button
+                                onClick={handleAddOption}
+                                className="px-2.5 py-1 text-xs font-bold text-zinc-350 bg-zinc-800 hover:bg-zinc-755 hover:text-indigo-400 rounded-lg transition-all cursor-pointer flex items-center gap-1 border border-zinc-700/40"
+                                type="button"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> Añadir Opción
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={col.id}
                     className="p-3 bg-zinc-950/40 border border-zinc-800/60 rounded-xl hover:border-zinc-700/60 transition-all flex flex-col md:flex-row md:items-center justify-between gap-3"
                     id={`dict-col-box-${col.id}`}
                   >
-                    <div className="space-y-1.5 min-w-0">
+                    <div className="space-y-1.5 min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         {isPrimaryKey ? (
                           <span className="flex items-center gap-1 text-[9px] font-mono font-bold bg-amber-500/10 border border-amber-500/20 text-beer text-amber-400 px-1.5 py-0.5 rounded">
@@ -97,10 +290,21 @@ export default function DictionaryView({ table }: DictionaryViewProps) {
                         <span className="block text-zinc-400 font-medium">Densidad</span>
                         <span className="text-emerald-400 font-bold">{getDensity(col.id)}</span>
                       </div>
-                      <div className="text-right border-l border-zinc-800 pl-3">
+                      <div className="text-right border-l border-zinc-800 pl-3 pr-1">
                         <span className="block text-zinc-500">Mapeado</span>
                         <span className="text-zinc-400">{col.type.toUpperCase()}</span>
                       </div>
+                      
+                      {!isPrimaryKey && (
+                        <button
+                          onClick={() => handleStartEdit(col)}
+                          className="p-1.5 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/40 transition-all cursor-pointer"
+                          title="Configurar restricciones y opciones de columna"
+                          id={`btn-edit-col-dict-${col.id}`}
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
