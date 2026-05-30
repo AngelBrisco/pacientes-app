@@ -77,6 +77,35 @@ export default function TableView({
   const [tempColumns, setTempColumns] = useState<any[] | null>(null);
   const [tempRows, setTempRows] = useState<any[] | null>(null);
 
+  // Inline editing state
+  const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null);
+  const [editingCellValue, setEditingCellValue] = useState<any>("");
+
+  const handleStartInlineEdit = (row: Row, colId: string, colType: ColumnType) => {
+    if (readOnly || colType === "file") return;
+    setEditingCell({ rowId: row.id, colId });
+    setEditingCellValue(row[colId]);
+  };
+
+  const handleSaveInlineCell = (rowId: string, colId: string) => {
+    if (!editingCell) return;
+    const row = table.rows?.find(r => r.id === rowId);
+    if (row) {
+      const updatedData = { ...row, [colId]: editingCellValue };
+      onUpdateRow(rowId, updatedData);
+    }
+    setEditingCell(null);
+  };
+
+  const handleInlineKeyDown = (e: React.KeyboardEvent, rowId: string, colId: string) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSaveInlineCell(rowId, colId);
+    } else if (e.key === "Escape") {
+      setEditingCell(null);
+    }
+  };
+
   // Sorting columns logic
   const handleSort = (colId: string) => {
     if (sortColumnId === colId) {
@@ -806,75 +835,148 @@ export default function TableView({
                     {/* Columns values */}
                     {table.columns.map((col) => {
                       const value = row[col.id];
+                      const isEditing = editingCell?.rowId === row.id && editingCell?.colId === col.id;
+
                       return (
-                        <td key={col.id} className="px-4 py-3 border-r border-zinc-800 text-zinc-300 font-sans whitespace-nowrap overflow-hidden text-ellipsis">
-                          {col.type === "boolean" ? (
-                            <div className="flex items-center">
-                              {value ? (
-                                <span className="flex items-center gap-1.5 text-emerald-400 font-bold font-mono text-[10px] bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> SI
+                        <td
+                          key={col.id}
+                          onDoubleClick={() => handleStartInlineEdit(row, col.id, col.type)}
+                          className={`px-4 py-3 border-r border-zinc-800 text-zinc-300 font-sans whitespace-nowrap overflow-hidden text-ellipsis transition-all ${
+                            !readOnly && col.type !== "file" ? "cursor-text hover:bg-zinc-800/15" : ""
+                          }`}
+                          title={!readOnly && col.type !== "file" ? "Doble clic para editar directamente" : undefined}
+                        >
+                          {isEditing ? (
+                            col.type === "boolean" ? (
+                              <select
+                                autoFocus
+                                value={editingCellValue === true ? "true" : "false"}
+                                onChange={(e) => setEditingCellValue(e.target.value === "true")}
+                                onBlur={() => handleSaveInlineCell(row.id, col.id)}
+                                onKeyDown={(e) => handleInlineKeyDown(e, row.id, col.id)}
+                                className="bg-zinc-950 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-zinc-200 outline-none w-full cursor-pointer focus:ring-1 focus:ring-indigo-500"
+                              >
+                                <option value="true">SI (True)</option>
+                                <option value="false">NO (False)</option>
+                              </select>
+                            ) : col.type === "select" ? (
+                              <select
+                                autoFocus
+                                value={editingCellValue || ""}
+                                onChange={(e) => setEditingCellValue(e.target.value)}
+                                onBlur={() => handleSaveInlineCell(row.id, col.id)}
+                                onKeyDown={(e) => handleInlineKeyDown(e, row.id, col.id)}
+                                className="bg-zinc-950 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-zinc-200 outline-none w-full cursor-pointer focus:ring-1 focus:ring-indigo-500"
+                              >
+                                <option value="">-- Sin Selección --</option>
+                                {col.options?.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : col.type === "number" ? (
+                              <input
+                                type="number"
+                                step="any"
+                                autoFocus
+                                value={editingCellValue !== undefined && editingCellValue !== null ? editingCellValue : ""}
+                                onChange={(e) => setEditingCellValue(e.target.value === "" ? "" : Number(e.target.value))}
+                                onBlur={() => handleSaveInlineCell(row.id, col.id)}
+                                onKeyDown={(e) => handleInlineKeyDown(e, row.id, col.id)}
+                                className="bg-zinc-950 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-zinc-200 font-mono outline-none w-full focus:ring-1 focus:ring-indigo-500"
+                              />
+                            ) : col.type === "date" ? (
+                              <input
+                                type="date"
+                                autoFocus
+                                value={editingCellValue || ""}
+                                onChange={(e) => setEditingCellValue(e.target.value)}
+                                onBlur={() => handleSaveInlineCell(row.id, col.id)}
+                                onKeyDown={(e) => handleInlineKeyDown(e, row.id, col.id)}
+                                className="bg-zinc-950 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-zinc-200 font-mono outline-none w-full focus:ring-1 focus:ring-indigo-500"
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                autoFocus
+                                value={editingCellValue || ""}
+                                onChange={(e) => setEditingCellValue(e.target.value)}
+                                onBlur={() => handleSaveInlineCell(row.id, col.id)}
+                                onKeyDown={(e) => handleInlineKeyDown(e, row.id, col.id)}
+                                className="bg-zinc-950 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-zinc-200 outline-none w-full focus:ring-1 focus:ring-indigo-500"
+                                maxLength={col.varcharLength}
+                              />
+                            )
+                          ) : (
+                            col.type === "boolean" ? (
+                              <div className="flex items-center">
+                                {value ? (
+                                  <span className="flex items-center gap-1.5 text-emerald-400 font-bold font-mono text-[10px] bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> SI
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-1.5 text-zinc-500 font-mono text-[10px] bg-zinc-800 px-2 py-0.5 rounded-full">
+                                    <XCircle className="w-3.5 h-3.5 text-zinc-500" /> NO
+                                  </span>
+                                )}
+                              </div>
+                            ) : col.type === "select" ? (
+                              value ? (
+                                <span className="font-mono text-xs px-2.5 py-1 rounded bg-zinc-800 text-zinc-300 font-semibold border border-zinc-700">
+                                  {value}
                                 </span>
                               ) : (
-                                <span className="flex items-center gap-1.5 text-zinc-500 font-mono text-[10px] bg-zinc-800 px-2 py-0.5 rounded-full">
-                                  <XCircle className="w-3.5 h-3.5 text-zinc-500" /> NO
+                                <span className="text-zinc-650 font-mono">-</span>
+                              )
+                            ) : col.type === "number" ? (
+                              <span className="font-mono font-medium text-emerald-300 text-sm">
+                                {value !== undefined && value !== null ? value : 0}
+                              </span>
+                            ) : col.type === "date" ? (
+                              value ? (
+                                <span className="flex items-center gap-1 text-zinc-400 font-mono text-xs">
+                                  <Calendar className="w-3 h-3 text-zinc-500" /> {value}
                                 </span>
-                              )}
-                            </div>
-                          ) : col.type === "select" ? (
-                            value ? (
-                              <span className="font-mono text-xs px-2.5 py-1 rounded bg-zinc-800 text-zinc-300 font-semibold border border-zinc-700">
-                                {value}
-                              </span>
+                              ) : (
+                                <span className="text-zinc-650 font-mono">-</span>
+                              )
+                            ) : col.type === "file" ? (
+                              (() => {
+                                const filesArr: string[] = Array.isArray(value) 
+                                  ? value 
+                                  : value && typeof value === "string" && value.startsWith("[") 
+                                    ? JSON.parse(value) 
+                                    : value ? [String(value)] : [];
+                                if (filesArr.length === 0) {
+                                  return <span className="text-zinc-500 italic font-mono text-[10.5px]">- (sin adjuntos)</span>;
+                                }
+                                return (
+                                  <div className="flex items-center gap-1.5 flex-wrap overflow-hidden max-w-full">
+                                    {filesArr.map((url, i) => {
+                                      const filename = url.split("/").pop() || "archivo";
+                                      const cleanName = filename.replace(/^\d+_/g, "");
+                                      return (
+                                        <a
+                                          key={i}
+                                          href={url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="inline-flex items-center gap-1.5 font-sans font-semibold text-[10.5px] bg-[#6366f1]/10 border border-[#6366f1]/20 text-[#818cf8] hover:text-[#a5b4fc] px-2 py-0.5 rounded-full transition-all"
+                                          title={`Ver ${cleanName}`}
+                                        >
+                                          <Paperclip className="w-2.5 h-2.5 shrink-0" />
+                                          <span className="truncate max-w-[130px]">{cleanName}</span>
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()
                             ) : (
-                              <span className="text-zinc-600 font-mono">-</span>
+                              String(value || "")
                             )
-                          ) : col.type === "number" ? (
-                            <span className="font-mono font-medium text-emerald-300 text-sm">
-                              {value !== undefined && value !== null ? value : 0}
-                            </span>
-                          ) : col.type === "date" ? (
-                            value ? (
-                              <span className="flex items-center gap-1 text-zinc-400 font-mono text-xs">
-                                <Calendar className="w-3 h-3 text-zinc-500" /> {value}
-                              </span>
-                            ) : (
-                              <span className="text-zinc-600 font-mono">-</span>
-                            )
-                          ) : col.type === "file" ? (
-                            (() => {
-                              const filesArr: string[] = Array.isArray(value) 
-                                ? value 
-                                : value && typeof value === "string" && value.startsWith("[") 
-                                  ? JSON.parse(value) 
-                                  : value ? [String(value)] : [];
-                              if (filesArr.length === 0) {
-                                return <span className="text-zinc-500 italic font-mono text-[10.5px]">- (sin adjuntos)</span>;
-                              }
-                              return (
-                                <div className="flex items-center gap-1.5 flex-wrap overflow-hidden max-w-full">
-                                  {filesArr.map((url, i) => {
-                                    const filename = url.split("/").pop() || "archivo";
-                                    const cleanName = filename.replace(/^\d+_/g, "");
-                                    return (
-                                      <a
-                                        key={i}
-                                        href={url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="inline-flex items-center gap-1.5 font-sans font-semibold text-[10.5px] bg-[#6366f1]/10 border border-[#6366f1]/20 text-[#818cf8] hover:text-[#a5b4fc] px-2 py-0.5 rounded-full transition-all"
-                                        title={`Ver ${cleanName}`}
-                                      >
-                                        <Paperclip className="w-2.5 h-2.5 shrink-0" />
-                                        <span className="truncate max-w-[130px]">{cleanName}</span>
-                                      </a>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            String(value || "")
                           )}
                         </td>
                       );
