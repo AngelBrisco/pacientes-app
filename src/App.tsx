@@ -24,13 +24,29 @@ import {
   ShieldCheck,
   Eye,
   Calendar,
-  Archive
+  Archive,
+  Menu,
+  X
 } from "lucide-react";
 
 export default function App() {
   const [dbState, setDbState] = useState<DbState | null>(null);
   const [activeTableId, setActiveTableId] = useState<string>("");
   const [activeView, setActiveView] = useState<"table" | "kanban" | "dictionary" | "users" | "backups">("table");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    try {
+      return window.innerWidth > 1024;
+    } catch {
+      return true;
+    }
+  });
+
+  const handleSelectTable = (tableId: string) => {
+    setActiveTableId(tableId);
+    if (window.innerWidth <= 1024) {
+      setIsSidebarOpen(false);
+    }
+  };
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
     try {
       const stored = localStorage.getItem("nococlone_session");
@@ -220,39 +236,60 @@ export default function App() {
   const activeTable = dbState?.tables?.find((t) => t.id === activeTableId) || null;
 
   return (
-    <div id="app-root-container" className="flex h-screen w-full bg-[#09090b] text-zinc-100 overflow-hidden font-sans">
+    <div id="app-root-container" className="flex h-screen w-full bg-[#09090b] text-zinc-100 overflow-hidden font-sans relative">
       
+      {/* Mobile backdrop for sidebar */}
+      {isSidebarOpen && (
+        <div
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+          id="sidebar-backdrop"
+        />
+      )}
+
       {/* Lateral schemas & audit trails control sidebar */}
       <Sidebar
         tables={dbState?.tables || []}
         activeTableId={activeTableId}
-        onSelectTable={setActiveTableId}
+        onSelectTable={handleSelectTable}
         onCreateTable={handleCreateTable}
         onDeleteTable={handleDeleteTable}
         logs={dbState?.logs || []}
         readOnly={currentUser.permissions === "read-only"}
         isAdmin={currentUser.role === "admin"}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
       />
 
       {/* Main Studio Console workspace */}
       <main id="workspace-main-panel" className="flex-1 flex flex-col h-full overflow-hidden bg-[#09090b]/40">
         
         {/* Workspace Dynamic Header */}
-        <header id="console-header" className="h-16 border-b border-zinc-900 flex items-center justify-between px-6 shrink-0 bg-[#09090b]/80 backdrop-blur-md">
-          <div className="flex items-center gap-8 min-w-0">
+        <header id="console-header" className="h-16 border-b border-zinc-900 flex items-center justify-between px-4 sm:px-6 shrink-0 bg-[#09090b]/80 backdrop-blur-md gap-4 min-w-0">
+          <div className="flex items-center gap-3 sm:gap-5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+            {/* Sidebar folding Toggle Button */}
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-1.5 sm:p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800/80 rounded-lg cursor-pointer transition-all flex items-center justify-center hover:text-indigo-455 shrink-0"
+              title={isSidebarOpen ? "Plegar barra lateral" : "Mostrar barra lateral"}
+              id="btn-toggle-sidebar"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+
             {/* Active Table Details with raw schema name hint */}
-            <div className="flex flex-col min-w-0" id="header-schema-title">
-              <h2 className="text-sm font-bold text-zinc-200 truncate flex items-center gap-2">
-                <span className="font-mono text-xs text-indigo-400 font-bold">public.</span>
-                {activeView === "users" ? "control_de_usuarios" : activeTable ? activeTable.name : "Seleccione un Schema"}
+            <div className="flex flex-col min-w-0 shrink-0" id="header-schema-title">
+              <h2 className="text-xs sm:text-sm font-bold text-zinc-200 truncate flex items-center gap-1 sm:gap-2">
+                <span className="font-mono text-[10px] sm:text-xs text-indigo-400 font-bold hidden xs:inline">public.</span>
+                {activeView === "users" ? "control_de_usuarios" : activeTable ? activeTable.name : "Seleccione Schema"}
               </h2>
-              <span className="font-mono text-[9.5px] text-zinc-500 uppercase tracking-wider block truncate">
-                {activeView === "users" ? "SISTEMA DE PRIVILEGIOS" : activeTable ? `ID FISICO: ${activeTable.id}` : "Esquemas vacíos"}
+              <span className="font-mono text-[8.5px] sm:text-[9.5px] text-zinc-500 uppercase tracking-wider block truncate">
+                {activeView === "users" ? "SISTEMA DE PRIVILEGIOS" : activeTable ? `ID FISCO: ${activeTable.id}` : "Esquemas vacíos"}
               </span>
             </div>
 
             {/* Tab view controllers for Table, Kanban, Dictionary & User Admin */}
-            <div className="flex h-16 items-center space-x-3 sm:space-x-5 border-l border-zinc-900 pl-4 sm:pl-6 select-none" id="header-views-navbar">
+            <div className="flex h-16 items-center space-x-2 sm:space-x-4 border-l border-zinc-900 pl-3 sm:pl-5 select-none shrink-0" id="header-views-navbar">
               {activeTable && (
                 <>
                   <button
@@ -291,7 +328,7 @@ export default function App() {
                         activeView === "dictionary"
                           ? "text-indigo-400 border-b-2 border-indigo-500"
                           : "text-zinc-500 hover:text-zinc-300"
-                      }`}
+                    }`}
                       title="Diccionario DDL de Datos"
                     >
                       <BookOpen className="w-3.5 h-3.5" />
@@ -337,7 +374,7 @@ export default function App() {
                     className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
                       activeView === "backups"
                         ? "text-indigo-400 border-b-2 border-indigo-500"
-                        : "text-zinc-500 hover:text-zinc-300"
+                        : "text-zinc-505 hover:text-zinc-300"
                     }`}
                     title="Copias de Seguridad (Snapshots)"
                   >
@@ -346,40 +383,41 @@ export default function App() {
                   </button>
                 </>
               )}
+
+              {/* Botón Integrado de Sesión de Usuario al final de las pestañas */}
+              <div className="border-l border-zinc-800/80 pl-3 sm:pl-4 flex items-center gap-2 shrink-0 select-none" id="header-user-tab-integration">
+                <div className="hidden md:flex flex-col text-left text-xs shrink-0 bg-transparent">
+                  <span className="font-semibold text-zinc-300 font-sans flex items-center gap-1 leading-none">
+                    <ShieldCheck className="w-3 h-3 text-indigo-404 shrink-0" />
+                    <span className="truncate max-w-[80px]" title={currentUser.name}>{currentUser.name}</span>
+                  </span>
+                  <span className="text-[8.5px] font-mono text-zinc-500 uppercase leading-none mt-0.5">
+                    {currentUser.role === "admin" ? "Admin" : "User"}
+                  </span>
+                </div>
+                <button
+                  id="btn-logout"
+                  onClick={handleLogout}
+                  className="px-2.5 py-1 bg-zinc-90 w bg-zinc-900 hover:bg-rose-500/10 hover:text-rose-400 text-zinc-400 hover:border-rose-500/20 border border-zinc-800 rounded-lg cursor-pointer transition-all flex items-center gap-1 text-[10.5px]"
+                  title="Cerrar sesión de forma segura"
+                >
+                  <span className="md:hidden text-zinc-350 font-semibold font-sans truncate max-w-[70px]">{currentUser.name}</span>
+                  <LogOut className="w-3 h-3 text-zinc-550 shrink-0" />
+                  <span className="hidden sm:inline-block">Salir</span>
+                </button>
+              </div>
+
             </div>
           </div>
 
-          {/* User session avatar console & sync loader */}
-          <div className="flex items-center gap-4 shrink-0" id="header-right-tools">
-            {/* Sync trigger Indicator */}
+          {/* Sync indicator only */}
+          <div className="flex items-center shrink-0" id="header-right-tools">
             {isSyncing && (
               <div className="flex items-center gap-1 text-[10px] text-indigo-400 font-mono font-bold uppercase animate-pulse">
                 <RefreshCw className="w-3 h-3 animate-spin text-indigo-500" />
-                <span>Syncing SQL...</span>
+                <span>Sync...</span>
               </div>
             )}
-            
-            {/* Active User session details card */}
-            <div className="flex items-center gap-4 bg-zinc-900/60 border border-zinc-800/80 px-3 py-1.5 rounded-xl text-xs shrink-0 select-none">
-              <div className="flex flex-col text-left">
-                <span className="font-semibold text-zinc-200 font-sans flex items-center gap-1.5 min-w-0">
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                  <span className="truncate max-w-[110px]" title={currentUser.name}>{currentUser.name}</span>
-                </span>
-                <span className="text-[9.5px] font-mono text-zinc-500 uppercase flex items-center gap-1 leading-none mt-0.5">
-                  {currentUser.role === "admin" ? "Administrador" : "Usuario"} • {currentUser.permissions === "read-write" ? "Escritura (SQL / LOCAL)" : "Sólo Lectura"}
-                </span>
-              </div>
-              <button
-                id="btn-logout"
-                onClick={handleLogout}
-                className="p-1 px-2.5 bg-zinc-800 hover:bg-rose-500/10 hover:text-rose-400 text-zinc-400 border border-zinc-700/60 hover:border-rose-500/20 rounded-lg cursor-pointer transition-all flex items-center gap-1 font-semibold text-[11px]"
-                title="Cerrar sesión de forma segura"
-              >
-                <LogOut className="w-3 h-3" />
-                <span>Salir</span>
-              </button>
-            </div>
           </div>
         </header>
 

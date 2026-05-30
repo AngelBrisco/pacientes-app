@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet } from "lucide-react";
+import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet, X } from "lucide-react";
 import { TableSchema, AuditLog } from "../types";
 import { normalizeImportedTableJson } from "../lib/normalization";
 
@@ -12,6 +12,8 @@ interface SidebarProps {
   logs: AuditLog[];
   readOnly?: boolean;
   isAdmin?: boolean;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
 export default function Sidebar({
@@ -23,6 +25,8 @@ export default function Sidebar({
   logs = [],
   readOnly = false,
   isAdmin = false,
+  isOpen = true,
+  onClose,
 }: SidebarProps) {
   const [newTableName, setNewTableName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -154,9 +158,14 @@ export default function Sidebar({
   };
 
   return (
-    <aside id="sidebar-panel" className="w-80 bg-zinc-950 border-r border-zinc-900 flex flex-col shrink-0 h-full overflow-hidden select-none">
+    <aside
+      id="sidebar-panel"
+      className={`${
+        isOpen ? "translate-x-0 w-80 shadow-2xl lg:shadow-none" : "-translate-x-full lg:-translate-x-full w-0 border-r-0"
+      } fixed lg:static inset-y-0 left-0 z-50 bg-zinc-950 border-r border-zinc-900 flex flex-col shrink-0 h-full overflow-hidden select-none transition-all duration-300 ease-in-out`}
+    >
       {/* Brand Header */}
-      <div className="p-5 border-b border-zinc-900 flex items-center justify-between animate-fade-in" id="sidebar-header">
+      <div className="p-5 border-b border-zinc-900 flex items-center justify-between animate-fade-in shrink-0" id="sidebar-header">
         <div className="flex items-center gap-2.5">
           <div className="p-2 bg-indigo-600/15 border border-indigo-500/25 text-indigo-400 rounded-lg">
             <Database className="w-5 h-5 text-indigo-500" />
@@ -166,6 +175,14 @@ export default function Sidebar({
             <span className="font-mono text-[10px] text-zinc-500 uppercase tracking-wider block">Relational Schema</span>
           </div>
         </div>
+        {/* Mobile close button */}
+        <button
+          onClick={onClose}
+          className="lg:hidden p-1.5 rounded-lg text-zinc-500 hover:text-rose-450 hover:bg-zinc-900/60 transition-all cursor-pointer"
+          title="Plegar barra lateral"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Schema / Databases List */}
