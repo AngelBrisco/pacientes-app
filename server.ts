@@ -3,10 +3,167 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { DbState, TableSchema, AuditLog, Column, Row } from "./src/types";
+import dotenv from "dotenv";
+import pg from "pg";
+
+dotenv.config();
+
+const { Pool } = pg;
+
+// Get Postgres config lazily
+let pgPool: pg.Pool | null = null;
+
+function getPgPool(): pg.Pool | null {
+  if (pgPool !== null) {
+    return pgPool;
+  }
+  
+  const connectionString = process.env.DATABASE_URL || "";
+  if (connectionString) {
+    console.log("[Postgres] Inicializando pool de conexión...");
+    pgPool = new Pool({
+      connectionString,
+      ssl: connectionString.includes("render.com") || connectionString.includes("neon.tech") || connectionString.includes("gcp") || connectionString.includes("cloud")
+        ? { rejectUnauthorized: false }
+        : false
+    });
+    return pgPool;
+  }
+  
+  const pgHost = process.env.PGHOST;
+  if (pgHost) {
+    console.log("[Postgres] Inicializando pool con host:", pgHost);
+    pgPool = new Pool({
+      host: pgHost,
+      port: Number(process.env.PGPORT || 5432),
+      user: process.env.PGUSER,
+      password: process.env.PGPASSWORD,
+      database: process.env.PGDATABASE,
+      ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : false
+    });
+    return pgPool;
+  }
+  
+  return null;
+}
+
+function isPostgresEnabled(): boolean {
+  return getPgPool() !== null;
+}
+
+async function ensureMetadataTable() {
+  const pool = getPgPool();
+  if (!pool) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS _nococlone_metadata (
+        key VARCHAR(100) PRIMARY KEY,
+        value JSONB
+      )
+    `);
+  } catch (err) {
+    console.error("[Postgres] Error al asegurar tabla de metadatos:", err);
+  }
+}
+
+async function getMetadataValue(key: string, defaultValue: any): Promise<any> {
+  const pool = getPgPool();
+  if (!pool) return defaultValue;
+  try {
+    const res = await pool.query('SELECT value FROM _nococlone_metadata WHERE key = $1', [key]);
+    if (res.rows.length > 0) {
+      return res.rows[0].value;
+    }
+  } catch (err) {
+    console.error(`[Postgres] Error al leer metadatos de ${key}:`, err);
+  }
+  return defaultValue;
+}
+
+async function setMetadataValue(key: string, value: any) {
+  const pool = getPgPool();
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO _nococlone_metadata (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, JSON.stringify(value)]
+    );
+  } catch (err) {
+    console.error(`[Postgres] Error al guardar metadatos de ${key}:`, err);
+  }
+}
+
+async function syncPhysicalSchemaWithMetadata(tables: TableSchema[]) {
+  const pool = getPgPool();
+  if (!pool) return;
+  
+  try {
+    // 1. Drop orphaned physical tables starting with 'tbl_' that are no longer defined
+    const realTablesQuery = await pool.query(`
+      SELECT table_name FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name LIKE 'tbl_%'
+    `);
+    const physicalNocoTables = realTablesQuery.rows.map(r => r.table_name);
+    const definedTableIds = tables.map(t => t.id);
+    
+    for (const physTab of physicalNocoTables) {
+      if (!definedTableIds.includes(physTab)) {
+        console.log(`[Postgres] Eliminando tabla física huérfana '${physTab}'...`);
+        await pool.query(`DROP TABLE IF EXISTS "${physTab}"`);
+      }
+    }
+
+    // 2. Synchronize defined tables
+    for (const table of tables) {
+      // Ensure table exists with default row generator matching pattern 'row_xxx'
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS "${table.id}" (
+          id VARCHAR(100) PRIMARY KEY DEFAULT ('row_' || substring(md5(random()::text) from 1 for 16))
+        )
+      `);
+      
+      // Query physical column list
+      const colRes = await pool.query(
+        `SELECT column_name FROM information_schema.columns 
+         WHERE table_schema = 'public' AND table_name = $1`,
+        [table.id]
+      );
+      const existingCols = colRes.rows.map(r => r.column_name);
+      
+      // 2a. Drop columns in the database that are no longer in metadata (except 'id')
+      const definedCols = table.columns.map(c => c.id);
+      for (const extCol of existingCols) {
+        if (extCol !== "id" && !definedCols.includes(extCol)) {
+          console.log(`[Postgres] Eliminando columna física huérfana '${extCol}' de '${table.id}'...`);
+          await pool.query(`ALTER TABLE "${table.id}" DROP COLUMN IF EXISTS "${extCol}"`);
+        }
+      }
+
+      // 2b. Add new columns
+      for (const col of table.columns) {
+        if (!existingCols.includes(col.id)) {
+          let pgType = "TEXT";
+          if (col.type === "number") pgType = "NUMERIC";
+          else if (col.type === "boolean") pgType = "BOOLEAN DEFAULT FALSE";
+          else if (col.type === "date") pgType = "DATE";
+          else if (col.type === "file") pgType = "JSONB";
+          
+          await pool.query(`ALTER TABLE "${table.id}" ADD COLUMN "${col.id}" ${pgType}`);
+          console.log(`[Postgres] Agregada columna física '${col.id}' con tipo ${pgType} a '${table.id}'`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[Postgres] Error al sincronizar esquemas físicos:", err);
+  }
+}
 
 // Note that Docker container should bind to 0.0.0.0 and port 3000
 const PORT = 3000;
 const DB_FILE_PATH = path.join(process.cwd(), "data", "db.json");
+
 
 // Ensure data directory exists
 fs.mkdirSync(path.dirname(DB_FILE_PATH), { recursive: true });
@@ -142,7 +299,104 @@ function getInitialDbState(): DbState {
   };
 }
 
-function loadDb(): DbState {
+async function loadDb(): Promise<DbState> {
+  if (isPostgresEnabled()) {
+    try {
+      const pool = getPgPool()!;
+      await ensureMetadataTable();
+      
+      const tablesMeta: TableSchema[] = await getMetadataValue("tables_metadata", []);
+      await syncPhysicalSchemaWithMetadata(tablesMeta);
+      
+      const tablesWithRows: TableSchema[] = [];
+      for (const t of tablesMeta) {
+        try {
+          const rowRes = await pool.query(`SELECT * FROM "${t.id}"`);
+          const rowsMapped = rowRes.rows.map(row => {
+            const mappedRow: any = { ...row };
+            t.columns.forEach(col => {
+              if (col.type === "file") {
+                const val = row[col.id];
+                if (typeof val === "string") {
+                  try {
+                    mappedRow[col.id] = JSON.parse(val);
+                  } catch {
+                    mappedRow[col.id] = [val];
+                  }
+                } else if (Array.isArray(val)) {
+                  mappedRow[col.id] = val;
+                } else {
+                  mappedRow[col.id] = [];
+                }
+              }
+            });
+            return mappedRow;
+          });
+          
+          tablesWithRows.push({
+            ...t,
+            rows: rowsMapped
+          });
+        } catch (err) {
+          console.error(`[Postgres] Error al leer registros de la tabla '${t.id}':`, err);
+          tablesWithRows.push({
+            ...t,
+            rows: []
+          });
+        }
+      }
+      
+      const users = await getMetadataValue("users", []);
+      const logs = await getMetadataValue("logs", []);
+      const snapshots = await getMetadataValue("snapshots", []);
+      
+      if (users.length === 0) {
+        const initialUsers: any[] = [
+          {
+            id: "usr_admin",
+            username: "admin",
+            name: "Administrador del Sistema",
+            password: "admin123",
+            role: "admin",
+            permissions: "read-write"
+          },
+          {
+            id: "usr_colaborador",
+            username: "colaborador",
+            name: "Colaborador de Prueba",
+            password: "colaborador123",
+            role: "user",
+            permissions: "read-write"
+          },
+          {
+            id: "usr_qa",
+            username: "qa",
+            name: "QA Auditor",
+            password: "qa123",
+            role: "user",
+            permissions: "read-only"
+          }
+        ];
+        await setMetadataValue("users", initialUsers);
+        return {
+          tables: tablesWithRows,
+          users: initialUsers,
+          logs,
+          snapshots
+        };
+      }
+      
+      return {
+        tables: tablesWithRows,
+        users,
+        logs,
+        snapshots
+      };
+    } catch (error) {
+      console.error("[Postgres] Falló loadDb en Postgres, reintentando con archivo local:", error);
+    }
+  }
+
   try {
     if (fs.existsSync(DB_FILE_PATH)) {
       const data = fs.readFileSync(DB_FILE_PATH, "utf-8");
@@ -174,7 +428,7 @@ function loadDb(): DbState {
             permissions: "read-only"
           }
         ];
-        saveDb(parsed);
+        fs.writeFileSync(DB_FILE_PATH, JSON.stringify(parsed, null, 2), "utf-8");
       }
       if (!parsed.snapshots) {
         parsed.snapshots = [];
@@ -182,18 +436,82 @@ function loadDb(): DbState {
       return parsed;
     }
   } catch (error) {
-    console.error("Error fatal cargando base de datos, reiniciando:", error);
+    console.error("Error fatal cargando base de datos JSON local:", error);
   }
   const defaultState = getInitialDbState();
-  saveDb(defaultState);
+  fs.writeFileSync(DB_FILE_PATH, JSON.stringify(defaultState, null, 2), "utf-8");
   return defaultState;
 }
 
-function saveDb(state: DbState) {
+async function saveDb(state: DbState) {
+  if (isPostgresEnabled()) {
+    try {
+      const pool = getPgPool()!;
+      await ensureMetadataTable();
+      
+      const tablesMetaOnly = state.tables.map(t => {
+        const { rows, ...meta } = t;
+        return meta;
+      });
+      
+      await setMetadataValue("tables_metadata", tablesMetaOnly);
+      await setMetadataValue("users", state.users || []);
+      await setMetadataValue("logs", state.logs || []);
+      await setMetadataValue("snapshots", state.snapshots || []);
+      
+      await syncPhysicalSchemaWithMetadata(state.tables);
+      
+      for (const table of state.tables) {
+        try {
+          const inMemoryRows = table.rows || [];
+          
+          const physicalRowRes = await pool.query(`SELECT id FROM "${table.id}"`);
+          const physicalRowIds = physicalRowRes.rows.map(r => r.id);
+          const inMemoryRowIds = inMemoryRows.map(r => r.id);
+          
+          const idsToDelete = physicalRowIds.filter(id => !inMemoryRowIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await pool.query(`DELETE FROM "${table.id}" WHERE id = ANY($1)`, [idsToDelete]);
+          }
+          
+          for (const row of inMemoryRows) {
+            const columnsToSet = table.columns.map(c => c.id);
+            if (columnsToSet.length === 0) continue;
+            
+            const values = columnsToSet.map(colId => {
+              const val = row[colId];
+              const colDef = table.columns.find(c => c.id === colId);
+              if (colDef && colDef.type === "file") {
+                return Array.isArray(val) ? JSON.stringify(val) : (val ? JSON.stringify([val]) : "[]");
+              }
+              return val === undefined ? null : val;
+            });
+            
+            const colPlaceholders = columnsToSet.map((_, idx) => `$${idx + 2}`).join(", ");
+            const updateSetClauses = columnsToSet.map((colId, idx) => `"${colId}" = $${idx + 2}`).join(", ");
+            
+            const upsertQuery = `
+              INSERT INTO "${table.id}" (id, ${columnsToSet.map(c => `"${c}"`).join(", ")})
+              VALUES ($1, ${colPlaceholders})
+              ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
+            `;
+            
+            await pool.query(upsertQuery, [row.id, ...values]);
+          }
+        } catch (err) {
+          console.error(`[Postgres] Error al sincronizar registros de la tabla '${table.id}':`, err);
+        }
+      }
+      return;
+    } catch (error) {
+      console.error("[Postgres] Falló el guardado en Postgres:", error);
+    }
+  }
+
   try {
     fs.writeFileSync(DB_FILE_PATH, JSON.stringify(state, null, 2), "utf-8");
   } catch (error) {
-    console.error("Error al persistir base de datos:", error);
+    console.error("Error al persistir base de datos local JSON:", error);
   }
 }
 
@@ -253,12 +571,12 @@ async function startServer() {
   }
 
   // API de Login
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: "El nombre de usuario y contraseña son estrictamente necesarios." });
     }
-    const db = loadDb();
+    const db = await loadDb();
     const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim() && u.password === password);
     if (!user) {
       return res.status(401).json({ error: "Credenciales inválidas. Por favor, intente nuevamente." });
@@ -274,8 +592,8 @@ async function startServer() {
   });
 
   // APIs para la administración de usuarios (Solo administrador)
-  app.get("/api/users", (req, res) => {
-    const db = loadDb();
+  app.get("/api/users", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -285,8 +603,8 @@ async function startServer() {
     res.json(db.users || []);
   });
 
-  app.post("/api/users", (req, res) => {
-    const db = loadDb();
+  app.post("/api/users", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -326,13 +644,13 @@ async function startServer() {
       details: `Creó la cuenta de usuario '${newUser.name}' con rol '${newUser.role}' y permisos de '${newUser.permissions}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db.users);
   });
 
-  app.put("/api/users/:userId", (req, res) => {
+  app.put("/api/users/:userId", async (req, res) => {
     const { userId } = req.params;
-    const db = loadDb();
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -366,13 +684,13 @@ async function startServer() {
       details: `Modificó las credenciales/permisos de la cuenta de usuario '${targetUser.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db.users);
   });
 
-  app.delete("/api/users/:userId", (req, res) => {
+  app.delete("/api/users/:userId", async (req, res) => {
     const { userId } = req.params;
-    const db = loadDb();
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -400,15 +718,15 @@ async function startServer() {
       details: `Eliminó la cuenta de usuario '${targetUser.name}' (${targetUser.username}).`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db.users);
   });
 
   // Rutas API Primero
 
   // Obtener estado actual de la DB
-  app.get("/api/db", (req, res) => {
-    let db = loadDb();
+  app.get("/api/db", async (req, res) => {
+    let db = await loadDb();
     const username = (req.headers["x-user-username"] as string) || "";
     if (username) {
       const user = db.users?.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
@@ -425,8 +743,8 @@ async function startServer() {
   });
 
   // Restaurar estado de prueba
-  app.post("/api/db/reset", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/reset", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -447,13 +765,13 @@ async function startServer() {
       tableName: "Base de Datos",
       details: "Se restauró toda la base de datos a los valores por defecto de fábrica."
     });
-    saveDb(freshDb);
+    await saveDb(freshDb);
     res.json(freshDb);
   });
 
   // API para Listar Snapshots / Backups
-  app.get("/api/db/snapshots", (req, res) => {
-    const db = loadDb();
+  app.get("/api/db/snapshots", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Solo administradores pueden ver copias de seguridad." });
@@ -462,8 +780,8 @@ async function startServer() {
   });
 
   // API para Crear un Snapshot de Seguridad
-  app.post("/api/db/snapshots", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/snapshots", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Solo administradores pueden crear copias de seguridad." });
@@ -498,13 +816,13 @@ async function startServer() {
       details: `Se creó la copia de seguridad (Snapshot) '${newSnapshot.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // API para Restaurar un Snapshot
-  app.post("/api/db/snapshots/:snapshotId/restore", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/snapshots/:snapshotId/restore", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Solo administradores pueden restaurar copias de seguridad." });
@@ -528,13 +846,13 @@ async function startServer() {
       details: `Se restauró la base de datos a la copia de seguridad (Snapshot) '${snapshot.name}' creada el ${new Date(snapshot.timestamp).toLocaleString()}.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // API para Eliminar un Snapshot
-  app.delete("/api/db/snapshots/:snapshotId", (req, res) => {
-    const db = loadDb();
+  app.delete("/api/db/snapshots/:snapshotId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Solo administradores pueden eliminar copias de seguridad." });
@@ -561,13 +879,13 @@ async function startServer() {
       details: `Se eliminó la copia de seguridad (Snapshot) '${deletedSnap.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Crear una nueva tabla
-  app.post("/api/db/tables", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/tables", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede crear tablas." });
@@ -670,13 +988,13 @@ async function startServer() {
       details: `Se creó la tabla '${newTable.name}' con ${dbColumns.length} columnas en el esquema.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Recrear una tabla existente (importar estructura + datos)
-  app.post("/api/db/tables/:tableId/recreate", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/tables/:tableId/recreate", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede recrear estructuras de tabla por importación." });
@@ -768,13 +1086,13 @@ async function startServer() {
       details: `La tabla '${existingTable.name}' fue totalmente recreada/sobrescrita por importación de archivo (${dbColumns.length} columnas, ${dbRows.length} registros).`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Borrar una tabla
-  app.delete("/api/db/tables/:tableId", (req, res) => {
-    const db = loadDb();
+  app.delete("/api/db/tables/:tableId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede borrar tablas." });
@@ -805,13 +1123,13 @@ async function startServer() {
       details: `Se eliminó la tabla completa '${deletedTable.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Agregar una nueva columna a una tabla
-  app.post("/api/db/tables/:tableId/columns", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/tables/:tableId/columns", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede gestionar columnas." });
@@ -864,13 +1182,13 @@ async function startServer() {
       details: `Se agregó la columna '${newColumn.name}' de tipo '${type}' a la tabla '${table.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Borrar una columna
-  app.delete("/api/db/tables/:tableId/columns/:columnId", (req, res) => {
-    const db = loadDb();
+  app.delete("/api/db/tables/:tableId/columns/:columnId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede borrar columnas." });
@@ -913,13 +1231,13 @@ async function startServer() {
       details: `Se eliminó la columna '${colName}' de la tabla '${table.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Modificar una columna existente (Nombre, tipo, opciones, varcharLength)
-  app.put("/api/db/tables/:tableId/columns/:columnId", (req, res) => {
-    const db = loadDb();
+  app.put("/api/db/tables/:tableId/columns/:columnId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyAdminAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede gestionar columnas." });
@@ -965,13 +1283,13 @@ async function startServer() {
       details: `Se modificó la columna '${prevName}' (tipo: ${prevType}) a '${col.name}' (tipo: ${col.type}) en la tabla '${table.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // API de Carga Masiva de Filas (Importación CSV)
-  app.post("/api/db/tables/:tableId/bulk-rows", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/tables/:tableId/bulk-rows", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -1044,13 +1362,13 @@ async function startServer() {
       details: `Importación CSV exitosa: Cargó ${importedCount} registros de pacientes en '${table.name}'.`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Crear una nueva fila
-  app.post("/api/db/tables/:tableId/rows", (req, res) => {
-    const db = loadDb();
+  app.post("/api/db/tables/:tableId/rows", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -1100,13 +1418,13 @@ async function startServer() {
       details: `Creó una nueva fila en '${table.name}' (${titleVal ? `Identificación: '${titleVal}'` : `ID: ${rowId}`}).`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // Actualizar una fila
-  app.put("/api/db/tables/:tableId/rows/:rowId", (req, res) => {
-    const db = loadDb();
+  app.put("/api/db/tables/:tableId/rows/:rowId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -1158,15 +1476,15 @@ async function startServer() {
         tableName: table.name,
         details: `Modificó fila en '${table.name}' (${titleVal ? `Identificación: '${titleVal}'` : `ID: ${rowId}`}). Detalle: ${changes.join(", ")}.`
       });
-      saveDb(db);
+      await saveDb(db);
     }
 
     res.json(db);
   });
 
   // Eliminar una fila
-  app.delete("/api/db/tables/:tableId/rows/:rowId", (req, res) => {
-    const db = loadDb();
+  app.delete("/api/db/tables/:tableId/rows/:rowId", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
@@ -1205,13 +1523,13 @@ async function startServer() {
       details: `Eliminó fila en '${table.name}' (${titleVal ? `Identificado como: '${titleVal}'` : `ID: ${rowId}`}).`
     });
 
-    saveDb(db);
+    await saveDb(db);
     res.json(db);
   });
 
   // API de Subida de Archivos Corporativos (Imágenes y PDFs)
-  app.post("/api/upload", (req, res) => {
-    const db = loadDb();
+  app.post("/api/upload", async (req, res) => {
+    const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
       return res.status(403).json({ error: auth.error });
