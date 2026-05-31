@@ -51,6 +51,40 @@ function isPostgresEnabled(): boolean {
   return getPgPool() !== null;
 }
 
+// Funciones de sanitarización y mapeo a nombres físicos SQL limpios (para n8n, etc.)
+function sanitizePhysicalName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // elimina tildes/acentos
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/__+/g, "_")
+    .trim()
+    .replace(/^_+|_+$/g, "");
+}
+
+function getPhysicalTableName(table: { id: string; name: string }): string {
+  if (table.id === "tbl_tasks" || table.id === "tbl_clients") {
+    return table.id;
+  }
+  const clean = sanitizePhysicalName(table.name);
+  if (!clean || ["select", "user", "table", "from", "where", "group", "by", "order", "limit", "id", "db", "users", "logs", "snapshots"].includes(clean)) {
+    return "tbl_" + (clean || table.id);
+  }
+  return clean;
+}
+
+function getPhysicalColumnName(col: { id: string; name: string }): string {
+  if (col.id.startsWith("col_title") || col.id.startsWith("col_status") || col.id.startsWith("col_priority") || col.id.startsWith("col_assigned") || col.id.startsWith("col_due_date") || col.id.startsWith("col_hours") || col.id.startsWith("col_done") || col.id.startsWith("col_cli_")) {
+    return col.id;
+  }
+  const clean = sanitizePhysicalName(col.name);
+  if (!clean || ["id", "select", "where", "from", "limit"].includes(clean)) {
+    return col.id;
+  }
+  return clean;
+}
+
 async function ensureMetadataTable() {
   const pool = getPgPool();
   if (!pool) return;
@@ -99,59 +133,63 @@ async function syncPhysicalSchemaWithMetadata(tables: TableSchema[]) {
   if (!pool) return;
   
   try {
-    // 1. Drop orphaned physical tables starting with 'tbl_' that are no longer defined
+    // 1. Eliminar tablas físicas huérfanas en PostgreSQL que ya no existen en los metadatos de nococlone
     const realTablesQuery = await pool.query(`
       SELECT table_name FROM information_schema.tables 
       WHERE table_schema = 'public' 
-      AND table_name LIKE 'tbl_%'
+      AND table_name != '_nococlone_metadata'
     `);
-    const physicalNocoTables = realTablesQuery.rows.map(r => r.table_name);
-    const definedTableIds = tables.map(t => t.id);
+    const physicalTables = realTablesQuery.rows.map(r => r.table_name);
+    const definedPhysicalNames = tables.map(t => getPhysicalTableName(t));
     
-    for (const physTab of physicalNocoTables) {
-      if (!definedTableIds.includes(physTab)) {
-        console.log(`[Postgres] Eliminando tabla física huérfana '${physTab}'...`);
-        await pool.query(`DROP TABLE IF EXISTS "${physTab}"`);
+    for (const physTab of physicalTables) {
+      if (!definedPhysicalNames.includes(physTab)) {
+        console.log(`[Postgres] Eliminando tabla física huérfana '${physTab}' de Postgres...`);
+        await pool.query(`DROP TABLE IF EXISTS "${physTab}" CASCADE`);
       }
     }
 
-    // 2. Synchronize defined tables
+    // 2. Sincronizar tablas definidas
     for (const table of tables) {
-      // Ensure table exists with default row generator matching pattern 'row_xxx'
+      const physTableName = getPhysicalTableName(table);
+      
+      // Crear tabla física si no existe
       await pool.query(`
-        CREATE TABLE IF NOT EXISTS "${table.id}" (
+        CREATE TABLE IF NOT EXISTS "${physTableName}" (
           id VARCHAR(100) PRIMARY KEY DEFAULT ('row_' || substring(md5(random()::text) from 1 for 16))
         )
       `);
       
-      // Query physical column list
+      // Consultar columnas físicas actuales de esta tabla PostgreSQL
       const colRes = await pool.query(
         `SELECT column_name FROM information_schema.columns 
          WHERE table_schema = 'public' AND table_name = $1`,
-        [table.id]
+        [physTableName]
       );
       const existingCols = colRes.rows.map(r => r.column_name);
       
-      // 2a. Drop columns in the database that are no longer in metadata (except 'id')
-      const definedCols = table.columns.map(c => c.id);
+      // 2a. Eliminar columnas que ya no están definidas (omitir no-SQL tipo "file")
+      const targetCols = table.columns.filter(c => c.type !== "file");
+      const definedCols = targetCols.map(c => getPhysicalColumnName(c));
+      
       for (const extCol of existingCols) {
         if (extCol !== "id" && !definedCols.includes(extCol)) {
-          console.log(`[Postgres] Eliminando columna física huérfana '${extCol}' de '${table.id}'...`);
-          await pool.query(`ALTER TABLE "${table.id}" DROP COLUMN IF EXISTS "${extCol}"`);
+          console.log(`[Postgres] Eliminando columna física huérfana '${extCol}' de '${physTableName}'...`);
+          await pool.query(`ALTER TABLE "${physTableName}" DROP COLUMN IF EXISTS "${extCol}" CASCADE`);
         }
       }
 
-      // 2b. Add new columns
-      for (const col of table.columns) {
-        if (!existingCols.includes(col.id)) {
+      // 2b. Agregar nuevas columnas físicas
+      for (const col of targetCols) {
+        const physColName = getPhysicalColumnName(col);
+        if (!existingCols.includes(physColName)) {
           let pgType = "TEXT";
           if (col.type === "number") pgType = "NUMERIC";
           else if (col.type === "boolean") pgType = "BOOLEAN DEFAULT FALSE";
           else if (col.type === "date") pgType = "DATE";
-          else if (col.type === "file") pgType = "JSONB";
           
-          await pool.query(`ALTER TABLE "${table.id}" ADD COLUMN "${col.id}" ${pgType}`);
-          console.log(`[Postgres] Agregada columna física '${col.id}' con tipo ${pgType} a '${table.id}'`);
+          await pool.query(`ALTER TABLE "${physTableName}" ADD COLUMN "${physColName}" ${pgType}`);
+          console.log(`[Postgres] Agregada columna física '${physColName}' con tipo ${pgType} a '${physTableName}'`);
         }
       }
     }
@@ -382,40 +420,51 @@ async function triggerBackgroundPostgresSync(state: DbState) {
     
     for (const table of state.tables) {
       try {
+        const physTableName = getPhysicalTableName(table);
         const inMemoryRows = table.rows || [];
         
-        const physicalRowRes = await pool.query(`SELECT id FROM "${table.id}"`);
+        const physicalRowRes = await pool.query(`SELECT id FROM "${physTableName}"`);
         const physicalRowIds = physicalRowRes.rows.map(r => r.id);
         const inMemoryRowIds = inMemoryRows.map(r => r.id);
         
         const idsToDelete = physicalRowIds.filter(id => !inMemoryRowIds.includes(id));
         if (idsToDelete.length > 0) {
-          await pool.query(`DELETE FROM "${table.id}" WHERE id = ANY($1)`, [idsToDelete]);
+          await pool.query(`DELETE FROM "${physTableName}" WHERE id = ANY($1)`, [idsToDelete]);
         }
         
+        // Filtramos columnas de tipo "file" para no insertarlas ni romper SQL
+        const sqlColumns = table.columns.filter(c => c.type !== "file");
+        if (sqlColumns.length === 0) continue;
+        
+        const physicalColNames = sqlColumns.map(c => getPhysicalColumnName(c));
+        const colPlaceholders = physicalColNames.map((_, idx) => `$${idx + 2}`).join(", ");
+        const updateSetClauses = physicalColNames.map((physColName, idx) => `"${physColName}" = $${idx + 2}`).join(", ");
+        
+        const upsertQuery = `
+          INSERT INTO "${physTableName}" (id, ${physicalColNames.map(c => `"${c}"`).join(", ")})
+          VALUES ($1, ${colPlaceholders})
+          ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
+        `;
+        
         for (const row of inMemoryRows) {
-          const columnsToSet = table.columns.map(c => c.id);
-          if (columnsToSet.length === 0) continue;
-          
-          const values = columnsToSet.map(colId => {
-            const val = row[colId];
-            const colDef = table.columns.find(c => c.id === colId);
-            if (colDef && colDef.type === "file") {
-              return Array.isArray(val) ? JSON.stringify(val) : (val ? JSON.stringify([val]) : "[]");
-            }
-            return val === undefined ? null : val;
-          });
-          
-          const colPlaceholders = columnsToSet.map((_, idx) => `$${idx + 2}`).join(", ");
-          const updateSetClauses = columnsToSet.map((colId, idx) => `"${colId}" = $${idx + 2}`).join(", ");
-          
-          const upsertQuery = `
-            INSERT INTO "${table.id}" (id, ${columnsToSet.map(c => `"${c}"`).join(", ")})
-            VALUES ($1, ${colPlaceholders})
-            ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
-          `;
-          
-          await pool.query(upsertQuery, [row.id, ...values]);
+          try {
+            const values = sqlColumns.map(colDef => {
+              const val = row[colDef.id];
+              if (val === undefined || val === null) return null;
+              if (colDef.type === "boolean") {
+                return (val === true || String(val).toLowerCase() === "true" || String(val) === "1" || String(val).trim().toLowerCase() === "si");
+              }
+              if (colDef.type === "number") {
+                const num = Number(val);
+                return isNaN(num) ? 0 : num;
+              }
+              return String(val);
+            });
+            
+            await pool.query(upsertQuery, [row.id, ...values]);
+          } catch (rowErr) {
+            console.error(`[Postgres Sync] Error al sincronizar fila '${row.id}' en tabla '${physTableName}':`, rowErr);
+          }
         }
       } catch (err) {
         console.error(`[Postgres Sync] Error al sincronizar registros de la tabla '${table.id}':`, err);
