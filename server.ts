@@ -300,103 +300,6 @@ function getInitialDbState(): DbState {
 }
 
 async function loadDb(): Promise<DbState> {
-  if (isPostgresEnabled()) {
-    try {
-      const pool = getPgPool()!;
-      await ensureMetadataTable();
-      
-      const tablesMeta: TableSchema[] = await getMetadataValue("tables_metadata", []);
-      await syncPhysicalSchemaWithMetadata(tablesMeta);
-      
-      const tablesWithRows: TableSchema[] = [];
-      for (const t of tablesMeta) {
-        try {
-          const rowRes = await pool.query(`SELECT * FROM "${t.id}"`);
-          const rowsMapped = rowRes.rows.map(row => {
-            const mappedRow: any = { ...row };
-            t.columns.forEach(col => {
-              if (col.type === "file") {
-                const val = row[col.id];
-                if (typeof val === "string") {
-                  try {
-                    mappedRow[col.id] = JSON.parse(val);
-                  } catch {
-                    mappedRow[col.id] = [val];
-                  }
-                } else if (Array.isArray(val)) {
-                  mappedRow[col.id] = val;
-                } else {
-                  mappedRow[col.id] = [];
-                }
-              }
-            });
-            return mappedRow;
-          });
-          
-          tablesWithRows.push({
-            ...t,
-            rows: rowsMapped
-          });
-        } catch (err) {
-          console.error(`[Postgres] Error al leer registros de la tabla '${t.id}':`, err);
-          tablesWithRows.push({
-            ...t,
-            rows: []
-          });
-        }
-      }
-      
-      const users = await getMetadataValue("users", []);
-      const logs = await getMetadataValue("logs", []);
-      const snapshots = await getMetadataValue("snapshots", []);
-      
-      if (users.length === 0) {
-        const initialUsers: any[] = [
-          {
-            id: "usr_admin",
-            username: "admin",
-            name: "Administrador del Sistema",
-            password: "admin123",
-            role: "admin",
-            permissions: "read-write"
-          },
-          {
-            id: "usr_colaborador",
-            username: "colaborador",
-            name: "Colaborador de Prueba",
-            password: "colaborador123",
-            role: "user",
-            permissions: "read-write"
-          },
-          {
-            id: "usr_qa",
-            username: "qa",
-            name: "QA Auditor",
-            password: "qa123",
-            role: "user",
-            permissions: "read-only"
-          }
-        ];
-        await setMetadataValue("users", initialUsers);
-        return {
-          tables: tablesWithRows,
-          users: initialUsers,
-          logs,
-          snapshots
-        };
-      }
-      
-      return {
-        tables: tablesWithRows,
-        users,
-        logs,
-        snapshots
-      };
-    } catch (error) {
-      console.error("[Postgres] Falló loadDb en Postgres, reintentando con archivo local:", error);
-    }
-  }
-
   try {
     if (fs.existsSync(DB_FILE_PATH)) {
       const data = fs.readFileSync(DB_FILE_PATH, "utf-8");
@@ -433,6 +336,14 @@ async function loadDb(): Promise<DbState> {
       if (!parsed.snapshots) {
         parsed.snapshots = [];
       }
+      
+      // trigger background sync so postgres is populated on load if it is empty
+      if (isPostgresEnabled()) {
+        triggerBackgroundPostgresSync(parsed).catch(err => {
+          console.error("[Postgres Sync] Error en sincronización inicial en background:", err);
+        });
+      }
+      
       return parsed;
     }
   } catch (error) {
@@ -440,78 +351,95 @@ async function loadDb(): Promise<DbState> {
   }
   const defaultState = getInitialDbState();
   fs.writeFileSync(DB_FILE_PATH, JSON.stringify(defaultState, null, 2), "utf-8");
+  
+  if (isPostgresEnabled()) {
+    triggerBackgroundPostgresSync(defaultState).catch(err => {
+      console.error("[Postgres Sync] Error en sincronización inicial por defecto:", err);
+    });
+  }
+  
   return defaultState;
 }
 
-async function saveDb(state: DbState) {
-  if (isPostgresEnabled()) {
-    try {
-      const pool = getPgPool()!;
-      await ensureMetadataTable();
-      
-      const tablesMetaOnly = state.tables.map(t => {
-        const { rows, ...meta } = t;
-        return meta;
-      });
-      
-      await setMetadataValue("tables_metadata", tablesMetaOnly);
-      await setMetadataValue("users", state.users || []);
-      await setMetadataValue("logs", state.logs || []);
-      await setMetadataValue("snapshots", state.snapshots || []);
-      
-      await syncPhysicalSchemaWithMetadata(state.tables);
-      
-      for (const table of state.tables) {
-        try {
-          const inMemoryRows = table.rows || [];
-          
-          const physicalRowRes = await pool.query(`SELECT id FROM "${table.id}"`);
-          const physicalRowIds = physicalRowRes.rows.map(r => r.id);
-          const inMemoryRowIds = inMemoryRows.map(r => r.id);
-          
-          const idsToDelete = physicalRowIds.filter(id => !inMemoryRowIds.includes(id));
-          if (idsToDelete.length > 0) {
-            await pool.query(`DELETE FROM "${table.id}" WHERE id = ANY($1)`, [idsToDelete]);
-          }
-          
-          for (const row of inMemoryRows) {
-            const columnsToSet = table.columns.map(c => c.id);
-            if (columnsToSet.length === 0) continue;
-            
-            const values = columnsToSet.map(colId => {
-              const val = row[colId];
-              const colDef = table.columns.find(c => c.id === colId);
-              if (colDef && colDef.type === "file") {
-                return Array.isArray(val) ? JSON.stringify(val) : (val ? JSON.stringify([val]) : "[]");
-              }
-              return val === undefined ? null : val;
-            });
-            
-            const colPlaceholders = columnsToSet.map((_, idx) => `$${idx + 2}`).join(", ");
-            const updateSetClauses = columnsToSet.map((colId, idx) => `"${colId}" = $${idx + 2}`).join(", ");
-            
-            const upsertQuery = `
-              INSERT INTO "${table.id}" (id, ${columnsToSet.map(c => `"${c}"`).join(", ")})
-              VALUES ($1, ${colPlaceholders})
-              ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
-            `;
-            
-            await pool.query(upsertQuery, [row.id, ...values]);
-          }
-        } catch (err) {
-          console.error(`[Postgres] Error al sincronizar registros de la tabla '${table.id}':`, err);
+async function triggerBackgroundPostgresSync(state: DbState) {
+  try {
+    const pool = getPgPool();
+    if (!pool) return;
+    
+    await ensureMetadataTable();
+    
+    const tablesMetaOnly = state.tables.map(t => {
+      const { rows, ...meta } = t;
+      return meta;
+    });
+    
+    await setMetadataValue("tables_metadata", tablesMetaOnly);
+    await setMetadataValue("users", state.users || []);
+    await setMetadataValue("logs", state.logs || []);
+    await setMetadataValue("snapshots", state.snapshots || []);
+    
+    await syncPhysicalSchemaWithMetadata(state.tables);
+    
+    for (const table of state.tables) {
+      try {
+        const inMemoryRows = table.rows || [];
+        
+        const physicalRowRes = await pool.query(`SELECT id FROM "${table.id}"`);
+        const physicalRowIds = physicalRowRes.rows.map(r => r.id);
+        const inMemoryRowIds = inMemoryRows.map(r => r.id);
+        
+        const idsToDelete = physicalRowIds.filter(id => !inMemoryRowIds.includes(id));
+        if (idsToDelete.length > 0) {
+          await pool.query(`DELETE FROM "${table.id}" WHERE id = ANY($1)`, [idsToDelete]);
         }
+        
+        for (const row of inMemoryRows) {
+          const columnsToSet = table.columns.map(c => c.id);
+          if (columnsToSet.length === 0) continue;
+          
+          const values = columnsToSet.map(colId => {
+            const val = row[colId];
+            const colDef = table.columns.find(c => c.id === colId);
+            if (colDef && colDef.type === "file") {
+              return Array.isArray(val) ? JSON.stringify(val) : (val ? JSON.stringify([val]) : "[]");
+            }
+            return val === undefined ? null : val;
+          });
+          
+          const colPlaceholders = columnsToSet.map((_, idx) => `$${idx + 2}`).join(", ");
+          const updateSetClauses = columnsToSet.map((colId, idx) => `"${colId}" = $${idx + 2}`).join(", ");
+          
+          const upsertQuery = `
+            INSERT INTO "${table.id}" (id, ${columnsToSet.map(c => `"${c}"`).join(", ")})
+            VALUES ($1, ${colPlaceholders})
+            ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
+          `;
+          
+          await pool.query(upsertQuery, [row.id, ...values]);
+        }
+      } catch (err) {
+        console.error(`[Postgres Sync] Error al sincronizar registros de la tabla '${table.id}':`, err);
       }
-      return;
-    } catch (error) {
-      console.error("[Postgres] Falló el guardado en Postgres:", error);
     }
+    console.log("[Postgres Sync] Sincronización en segundo plano completada con éxito.");
+  } catch (error) {
+    console.error("[Postgres Sync] Falló la sincronización en background en Postgres:", error);
   }
+}
 
+async function saveDb(state: DbState) {
+  // Siempre guardar primero de forma local y síncrona/inmediata en el archivo JSON
   try {
     fs.writeFileSync(DB_FILE_PATH, JSON.stringify(state, null, 2), "utf-8");
   } catch (error) {
     console.error("Error al persistir base de datos local JSON:", error);
+  }
+
+  // Sincronizar en segundo plano de forma no bloqueante si PostgreSQL está activo
+  if (isPostgresEnabled()) {
+    triggerBackgroundPostgresSync(state).catch(err => {
+      console.error("[Postgres Sync] Fallo de sincronización en segundo plano:", err);
+    });
   }
 }
 
