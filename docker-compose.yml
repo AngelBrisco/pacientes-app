@@ -1,25 +1,6 @@
 version: '3.8'
 
 services:
-  # Base de datos PostgreSQL para persistencia real y sincronización bidireccional
-  db:
-    image: postgres:15-alpine
-    container_name: nococlone_db
-    environment:
-      - POSTGRES_USER=nocouser
-      - POSTGRES_PASSWORD=nocopass
-      - POSTGRES_DB=nocodb
-    ports:
-      - "5432:5432" # Expuesto para que n8n o herramientas externas se conecten directamente
-    volumes:
-      - ./postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nocouser -d nocodb"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   nococlone:
     build:
       context: .
@@ -28,15 +9,11 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Sigue soportando modo híbrido para almacenar archivos adjuntos de subida local
+      # Canal de persistencia local para la base de datos JSON y adjuntos subidos
       - ./nococlone_data:/app/data
     environment:
       - NODE_ENV=production
       - GEMINI_API_KEY=tu_api_key_opcional
-      # Conexión directa al contenedor db usando el nombre del servicio en la red de docker
-      - DATABASE_URL=postgresql://nocouser:nocopass@db:5432/nocodb
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
+
 

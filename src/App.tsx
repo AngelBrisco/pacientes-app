@@ -350,20 +350,6 @@ export default function App() {
                     <Calendar className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Calendario</span>
                   </button>
-
-                  <button
-                    id="tab-view-api"
-                    onClick={() => setActiveView("api")}
-                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
-                      activeView === "api"
-                        ? "text-indigo-400 border-b-2 border-indigo-500"
-                        : "text-zinc-505 hover:text-zinc-300"
-                    }`}
-                    title="Integración API para n8n"
-                  >
-                    <Workflow className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Conexión n8n</span>
-                  </button>
                 </>
               )}
 
@@ -395,6 +381,20 @@ export default function App() {
                   >
                     <Archive className="w-3.5 h-3.5" />
                     <span className="hidden md:inline">Copias</span>
+                  </button>
+
+                  <button
+                    id="tab-view-api"
+                    onClick={() => setActiveView("api")}
+                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      activeView === "api"
+                        ? "text-indigo-400 border-b-2 border-indigo-500"
+                        : "text-zinc-505 hover:text-zinc-300"
+                    }`}
+                    title="Integración API para n8n"
+                  >
+                    <Workflow className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Conexión n8n</span>
                   </button>
                 </>
               )}
@@ -528,7 +528,7 @@ export default function App() {
 
               {activeView === "calendar" && <CalendarView table={activeTable} />}
 
-              {activeView === "api" && <ApiIntegrationView table={activeTable} />}
+              {activeView === "api" && currentUser.role === "admin" && <ApiIntegrationView table={activeTable} />}
             </div>
           )}
         </div>
