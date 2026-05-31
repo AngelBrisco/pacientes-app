@@ -48,7 +48,9 @@ function getPgPool(): pg.Pool | null {
 }
 
 function isPostgresEnabled(): boolean {
-  return getPgPool() !== null;
+  // Desactivado por completo el uso de la base de datos SQL Postgres secundaria.
+  // Ahora usamos la API propia de NocoClone que lee directamente de la base local JSON (guardando el 100% de los registros).
+  return false;
 }
 
 // Funciones de sanitarización y mapeo a nombres físicos SQL limpios (para n8n, etc.)
@@ -757,6 +759,282 @@ async function startServer() {
       }
     }
     res.json(db);
+  });
+
+  // ==========================================
+  //  PROPIA API DE ACCESO REST COMPATIBLE PARA n8n (estilo NocoDB / Airtable)
+  // ==========================================
+
+  // 1. OBTENER FILAS (GET)
+  app.get("/api/v1/db/data/v1/:projectName/:tableName", async (req, res) => {
+    try {
+      const db = await loadDb();
+      const { tableName } = req.params;
+      const format = req.query.format || "nocodb"; // supports "flat" or "nocodb"
+      const cleanSearchName = tableName.trim().toLowerCase();
+
+      // Buscar tabla por ID, nombre exacto o nombre en formato físico sql
+      const table = db.tables.find(t => 
+        t.id.toLowerCase() === cleanSearchName ||
+        t.name.toLowerCase() === cleanSearchName ||
+        getPhysicalTableName(t).toLowerCase() === cleanSearchName ||
+        sanitizePhysicalName(t.name) === cleanSearchName
+      );
+
+      if (!table) {
+        return res.status(404).json({ error: `La tabla con el identificador o nombre '${tableName}' no existe en esta Base de Datos.` });
+      }
+
+      // Convertir filas internas (col_xxx) a un mapeado dual que incluye tanto column ID como nombres limpios para n8n
+      const mappedRows = (table.rows || []).map(row => {
+        const mappedRow: any = { id: row.id };
+        table.columns.forEach(col => {
+          const val = row[col.id];
+          // Soportar el ID físico original (ej. col_5_0)
+          mappedRow[col.id] = val;
+          // Soportar el nombre exacto de la columna humana (ej. "Nombre")
+          mappedRow[col.name] = val;
+          // Soportar el nombre físico sanitizado (ej. "nombre" o "fecha_de_cirugia")
+          mappedRow[sanitizePhysicalName(col.name)] = val;
+        });
+        return mappedRow;
+      });
+
+      if (format === "flat") {
+        return res.json(mappedRows);
+      }
+
+      // Devolver formato estándar compatible con el nodo nativo NocoDB de n8n
+      res.json({
+        list: mappedRows,
+        pageInfo: {
+          totalRows: mappedRows.length,
+          page: 1,
+          pageSize: 1000,
+          isFirstPage: true,
+          isLastPage: true
+        }
+      });
+    } catch (apiErr: any) {
+      console.error("[n8n API GET] Error consultando tabla:", apiErr);
+      res.status(500).json({ error: apiErr.message });
+    }
+  });
+
+  // 2. INSERTAR NUEVA(S) FILA(S) (POST)
+  app.post("/api/v1/db/data/v1/:projectName/:tableName", async (req, res) => {
+    try {
+      const db = await loadDb();
+      const { tableName } = req.params;
+      const cleanSearchName = tableName.trim().toLowerCase();
+
+      const table = db.tables.find(t => 
+        t.id.toLowerCase() === cleanSearchName ||
+        t.name.toLowerCase() === cleanSearchName ||
+        getPhysicalTableName(t).toLowerCase() === cleanSearchName ||
+        sanitizePhysicalName(t.name) === cleanSearchName
+      );
+
+      if (!table) {
+        return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
+      }
+
+      const isArray = Array.isArray(req.body);
+      const rowsToInsert = isArray ? req.body : [req.body];
+      let timestampIncr = Date.now();
+      const newlyCreatedRows: any[] = [];
+
+      for (const inputRow of rowsToInsert) {
+        const rowId = "row_" + (timestampIncr++) + "_" + Math.random().toString(36).substring(2, 6);
+        const newRow: any = { id: rowId };
+
+        table.columns.forEach(col => {
+          // Candidatos de búsqueda en el body para este campo
+          const candidates = [
+            col.id,
+            col.name,
+            sanitizePhysicalName(col.name),
+            col.name.toLowerCase()
+          ];
+          
+          let val: any = undefined;
+          for (const cand of candidates) {
+            if (inputRow[cand] !== undefined) {
+              val = inputRow[cand];
+              break;
+            }
+          }
+
+          // Convertir y limpiar tipo de dato
+          if (col.type === "boolean") {
+            newRow[col.id] = val === undefined ? false : (val === true || String(val).toLowerCase() === "true" || String(val) === "1" || String(val).trim().toLowerCase() === "si");
+          } else if (col.type === "number") {
+            newRow[col.id] = val === undefined || val === "" || val === null ? "" : Number(val);
+          } else if (col.type === "file") {
+            newRow[col.id] = Array.isArray(val) ? val : (val ? [val] : []);
+          } else {
+            newRow[col.id] = val === undefined || val === null ? "" : String(val);
+          }
+        });
+
+        table.rows.push(newRow);
+        newlyCreatedRows.push(newRow);
+      }
+
+      // Loguear inserción en auditoría
+      db.logs.push({
+        id: "log_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        user: "API n8n",
+        action: "CREATE",
+        tableId: table.id,
+        tableName: table.name,
+        details: `Se insertó(aron) ${newlyCreatedRows.length} fila(s) mediante el API REST de n8n.`
+      });
+
+      await saveDb(db);
+
+      // Formatear respuesta con los campos extendidos duales
+      const responseData = newlyCreatedRows.map(row => {
+        const r: any = { id: row.id };
+        table.columns.forEach(col => {
+          r[col.id] = row[col.id];
+          r[col.name] = row[col.id];
+          r[sanitizePhysicalName(col.name)] = row[col.id];
+        });
+        return r;
+      });
+
+      res.status(201).json(isArray ? responseData : responseData[0]);
+    } catch (apiErr: any) {
+      console.error("[n8n API POST] Error insertando fila:", apiErr);
+      res.status(500).json({ error: apiErr.message });
+    }
+  });
+
+  // 3. ACTUALIZAR UNA FILA (PATCH)
+  app.patch("/api/v1/db/data/v1/:projectName/:tableName/:rowId", async (req, res) => {
+    try {
+      const db = await loadDb();
+      const { tableName, rowId } = req.params;
+      const cleanSearchName = tableName.trim().toLowerCase();
+
+      const table = db.tables.find(t => 
+        t.id.toLowerCase() === cleanSearchName ||
+        t.name.toLowerCase() === cleanSearchName ||
+        getPhysicalTableName(t).toLowerCase() === cleanSearchName ||
+        sanitizePhysicalName(t.name) === cleanSearchName
+      );
+
+      if (!table) {
+        return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
+      }
+
+      const existingRow = table.rows.find(r => r.id === rowId);
+      if (!existingRow) {
+        return res.status(404).json({ error: `La fila con ID '${rowId}' no se encuentra en esta tabla.` });
+      }
+
+      const inputRow = req.body || {};
+
+      table.columns.forEach(col => {
+        const candidates = [
+          col.id,
+          col.name,
+          sanitizePhysicalName(col.name),
+          col.name.toLowerCase()
+        ];
+        
+        let val: any = undefined;
+        let found = false;
+        for (const cand of candidates) {
+          if (inputRow[cand] !== undefined) {
+            val = inputRow[cand];
+            found = true;
+            break;
+          }
+        }
+
+        if (found) {
+          if (col.type === "boolean") {
+            existingRow[col.id] = (val === true || String(val).toLowerCase() === "true" || String(val) === "1" || String(val).trim().toLowerCase() === "si");
+          } else if (col.type === "number") {
+            existingRow[col.id] = val === "" || val === null ? "" : Number(val);
+          } else if (col.type === "file") {
+            existingRow[col.id] = Array.isArray(val) ? val : (val ? [val] : []);
+          } else {
+            existingRow[col.id] = val === null ? "" : String(val);
+          }
+        }
+      });
+
+      db.logs.push({
+        id: "log_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        user: "API n8n",
+        action: "UPDATE",
+        tableId: table.id,
+        tableName: table.name,
+        details: `Se actualizó el registro ID '${rowId}' mediante el API REST de n8n.`
+      });
+
+      await saveDb(db);
+
+      const responseData: any = { id: existingRow.id };
+      table.columns.forEach(col => {
+        responseData[col.id] = existingRow[col.id];
+        responseData[col.name] = existingRow[col.id];
+        responseData[sanitizePhysicalName(col.name)] = existingRow[col.id];
+      });
+
+      res.json(responseData);
+    } catch (apiErr: any) {
+      console.error("[n8n API PATCH] Error actualizando fila:", apiErr);
+      res.status(500).json({ error: apiErr.message });
+    }
+  });
+
+  // 4. ELIMINAR UNA FILA (DELETE)
+  app.delete("/api/v1/db/data/v1/:projectName/:tableName/:rowId", async (req, res) => {
+    try {
+      const db = await loadDb();
+      const { tableName, rowId } = req.params;
+      const cleanSearchName = tableName.trim().toLowerCase();
+
+      const table = db.tables.find(t => 
+        t.id.toLowerCase() === cleanSearchName ||
+        t.name.toLowerCase() === cleanSearchName ||
+        getPhysicalTableName(t).toLowerCase() === cleanSearchName ||
+        sanitizePhysicalName(t.name) === cleanSearchName
+      );
+
+      if (!table) {
+        return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
+      }
+
+      const rIdx = table.rows.findIndex(r => r.id === rowId);
+      if (rIdx === -1) {
+        return res.status(404).json({ error: `La fila con ID '${rowId}' no existe en esta tabla.` });
+      }
+
+      table.rows.splice(rIdx, 1);
+
+      db.logs.push({
+        id: "log_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        user: "API n8n",
+        action: "DELETE",
+        tableId: table.id,
+        tableName: table.name,
+        details: `Se eliminó el registro ID '${rowId}' mediante el API REST de n8n.`
+      });
+
+      await saveDb(db);
+      res.json({ success: true, message: `Registro '${rowId}' eliminado exitosamente.` });
+    } catch (apiErr: any) {
+      console.error("[n8n API DELETE] Error eliminando fila:", apiErr);
+      res.status(500).json({ error: apiErr.message });
+    }
   });
 
   // Diagnóstico de Postgres e inspección de errores de sincronización
