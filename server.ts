@@ -400,9 +400,18 @@ async function loadDb(): Promise<DbState> {
 }
 
 async function triggerBackgroundPostgresSync(state: DbState) {
+  const syncReport: any = {
+    timestamp: new Date().toISOString(),
+    tables: []
+  };
+
   try {
     const pool = getPgPool();
-    if (!pool) return;
+    if (!pool) {
+      syncReport.error = "PostgreSQL pool is null";
+      fs.writeFileSync(path.join(process.cwd(), "data", "sync_errors.json"), JSON.stringify(syncReport, null, 2), "utf-8");
+      return;
+    }
     
     await ensureMetadataTable();
     
@@ -419,6 +428,15 @@ async function triggerBackgroundPostgresSync(state: DbState) {
     await syncPhysicalSchemaWithMetadata(state.tables);
     
     for (const table of state.tables) {
+      const tableReport: any = {
+        tableId: table.id,
+        tableName: table.name,
+        physicalTableName: getPhysicalTableName(table),
+        inMemoryRowsCount: table.rows?.length || 0,
+        syncedRowsCount: 0,
+        errors: []
+      };
+
       try {
         const physTableName = getPhysicalTableName(table);
         const inMemoryRows = table.rows || [];
@@ -434,7 +452,11 @@ async function triggerBackgroundPostgresSync(state: DbState) {
         
         // Filtramos columnas de tipo "file" para no insertarlas ni romper SQL
         const sqlColumns = table.columns.filter(c => c.type !== "file");
-        if (sqlColumns.length === 0) continue;
+        if (sqlColumns.length === 0) {
+          tableReport.message = "No SQL-compatible columns found (e.g. only 'file' columns)";
+          syncReport.tables.push(tableReport);
+          continue;
+        }
         
         const physicalColNames = sqlColumns.map(c => getPhysicalColumnName(c));
         const colPlaceholders = physicalColNames.map((_, idx) => `$${idx + 2}`).join(", ");
@@ -462,17 +484,35 @@ async function triggerBackgroundPostgresSync(state: DbState) {
             });
             
             await pool.query(upsertQuery, [row.id, ...values]);
-          } catch (rowErr) {
+            tableReport.syncedRowsCount++;
+          } catch (rowErr: any) {
             console.error(`[Postgres Sync] Error al sincronizar fila '${row.id}' en tabla '${physTableName}':`, rowErr);
+            tableReport.errors.push({
+              rowId: row.id,
+              error: rowErr.message,
+              detail: rowErr.detail,
+              hint: rowErr.hint,
+              rowData: row
+            });
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(`[Postgres Sync] Error al sincronizar registros de la tabla '${table.id}':`, err);
+        tableReport.error = err.message;
       }
+
+      syncReport.tables.push(tableReport);
     }
     console.log("[Postgres Sync] Sincronización en segundo plano completada con éxito.");
-  } catch (error) {
+  } catch (error: any) {
     console.error("[Postgres Sync] Falló la sincronización en background en Postgres:", error);
+    syncReport.globalError = error.message;
+  }
+
+  try {
+    fs.writeFileSync(path.join(process.cwd(), "data", "sync_errors.json"), JSON.stringify(syncReport, null, 2), "utf-8");
+  } catch (writeErr) {
+    console.error("[Postgres Sync] Error escribiendo sync_errors.json:", writeErr);
   }
 }
 
@@ -717,6 +757,110 @@ async function startServer() {
       }
     }
     res.json(db);
+  });
+
+  // Diagnóstico de Postgres e inspección de errores de sincronización
+  app.get("/api/debug/pg-status", async (req, res) => {
+    const isEnabled = isPostgresEnabled();
+    const pool = getPgPool();
+    const db = await loadDb();
+    
+    if (!isEnabled || !pool) {
+      return res.json({
+        enabled: false,
+        message: "PostgreSQL is not enabled or connection is not configured."
+      });
+    }
+
+    try {
+      // Obtener listado de tablas físicas
+      const tablesQuery = await pool.query(`
+        SELECT table_name FROM information_schema.tables 
+        WHERE table_schema = 'public'
+      `);
+      const physicalTables = tablesQuery.rows.map(r => r.table_name);
+
+      const tableCounts: Record<string, number> = {};
+      for (const t of physicalTables) {
+        try {
+          const countQuery = await pool.query(`SELECT COUNT(*) FROM "${t}"`);
+          tableCounts[t] = parseInt(countQuery.rows[0].count);
+        } catch (e: any) {
+          tableCounts[t] = -1;
+        }
+      }
+
+      const syncErrors: any[] = [];
+      const syncLog: string[] = [];
+
+      await ensureMetadataTable();
+      await syncPhysicalSchemaWithMetadata(db.tables);
+
+      for (const table of db.tables) {
+        const physTableName = getPhysicalTableName(table);
+        const inMemoryRows = table.rows || [];
+        
+        syncLog.push(`Table ${table.name} (id: ${table.id}, physical: ${physTableName}) has ${inMemoryRows.length} in-memory rows.`);
+
+        const sqlColumns = table.columns.filter(c => c.type !== "file");
+        const physicalColNames = sqlColumns.map(c => getPhysicalColumnName(c));
+        const colPlaceholders = physicalColNames.map((_, idx) => `$${idx + 2}`).join(", ");
+        const updateSetClauses = physicalColNames.map((physColName, idx) => `"${physColName}" = $${idx + 2}`).join(", ");
+        
+        const upsertQuery = `
+          INSERT INTO "${physTableName}" (id, ${physicalColNames.map(c => `"${c}"`).join(", ")})
+          VALUES ($1, ${colPlaceholders})
+          ON CONFLICT (id) DO UPDATE SET ${updateSetClauses}
+        `;
+
+        let successCount = 0;
+        for (const row of inMemoryRows) {
+          try {
+            const values = sqlColumns.map(colDef => {
+              const val = row[colDef.id];
+              if (val === undefined || val === null) return null;
+              if (colDef.type === "boolean") {
+                return (val === true || String(val).toLowerCase() === "true" || String(val) === "1" || String(val).trim().toLowerCase() === "si");
+              }
+              if (colDef.type === "number") {
+                const num = Number(val);
+                return isNaN(num) ? 0 : num;
+              }
+              return String(val);
+            });
+            
+            await pool.query(upsertQuery, [row.id, ...values]);
+            successCount++;
+          } catch (rowErr: any) {
+            syncErrors.push({
+              tableName: table.name,
+              rowId: row.id,
+              error: rowErr.message,
+              detail: rowErr.detail,
+              hint: rowErr.hint,
+              rowData: row
+            });
+          }
+        }
+        syncLog.push(`Synced ${successCount}/${inMemoryRows.length} rows successfully for Table ${table.name}.`);
+      }
+
+      res.json({
+        enabled: true,
+        physicalTables,
+        tableCounts,
+        syncLog,
+        syncErrorsCount: syncErrors.length,
+        syncErrors,
+        databaseUrlConfigured: !!process.env.DATABASE_URL
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        enabled: true,
+        error: err.message,
+        stack: err.stack
+      });
+    }
   });
 
   // Restaurar estado de prueba
@@ -1050,6 +1194,19 @@ async function startServer() {
       : [];
 
     const existingTable = db.tables[tableIndex];
+    
+    // Si PostgreSQL está habilitado, eliminamos la tabla física CASCADE para asegurar que se cree desde cero sin conflicto de tipos antiguos
+    const pool = getPgPool();
+    if (pool) {
+      try {
+        const physName = getPhysicalTableName(existingTable);
+        console.log(`[Postgres Recreate] Eliminando tabla física '${physName}' de cascada para recrearla limpia...`);
+        await pool.query(`DROP TABLE IF EXISTS "${physName}" CASCADE`);
+      } catch (dropErr) {
+        console.error("[Postgres Recreate] Error al drop de tabla física:", dropErr);
+      }
+    }
+
     existingTable.columns = dbColumns as any;
     existingTable.rows = dbRows;
 
@@ -1564,6 +1721,12 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[NocoClone Server] Corriendo en http://0.0.0.0:${PORT}`);
+    // Sincronizar con Postgres al arranque
+    loadDb().then(() => {
+      console.log("[NocoClone Server] Auto-sincronización con PostgreSQL al arranque completada.");
+    }).catch(err => {
+      console.error("[NocoClone Server] Error al sincronizar con PostgreSQL al arranque:", err);
+    });
   });
 }
 
