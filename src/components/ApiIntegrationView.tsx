@@ -65,26 +65,20 @@ export default function ApiIntegrationView({ table }: ApiIntegrationViewProps) {
   const getMockGetResponse = () => {
     const mockRow: Record<string, any> = { id: "row_1780268347231_example" };
     table.columns.forEach(col => {
-      const cleanColName = sanitizeName(col.name);
-      
-      // Bind both standard ID column and human name
+      // Bind human name clean format as default to reflect optimized output
       if (col.type === "number") {
-        mockRow[col.id] = 120;
-        mockRow[cleanColName] = 120;
+        mockRow[col.name] = 17207579;
       } else if (col.type === "boolean") {
-        mockRow[col.id] = false;
-        mockRow[cleanColName] = false;
+        mockRow[col.name] = false;
       } else if (col.type === "date") {
-        mockRow[col.id] = "2026-06-15";
-        mockRow[cleanColName] = "2026-06-15";
+        mockRow[col.name] = "2026-06-15";
       } else if (col.type === "select") {
-        const val = col.options?.[0] || "Medio";
-        mockRow[col.id] = val;
-        mockRow[cleanColName] = val;
+        const val = col.options?.[0] || "Pami";
+        mockRow[col.name] = val;
+      } else if (col.type === "file") {
+        mockRow[col.name] = [];
       } else {
-        const val = `Diligenciado para ${col.name}`;
-        mockRow[col.id] = val;
-        mockRow[cleanColName] = val;
+        mockRow[col.name] = col.name === "Nombre" ? "Martinez Rufina" : `Diligenciado para ${col.name}`;
       }
     });
 
@@ -217,20 +211,32 @@ export default function ApiIntegrationView({ table }: ApiIntegrationViewProps) {
               {/* Endpoint details */}
               <div className="p-4 bg-zinc-900/40 border border-zinc-850 rounded-xl space-y-3">
                 <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                  <Send className="w-3.5 h-3.5 text-indigo-400" /> Detalles de Operación
+                  <Send className="w-3.5 h-3.5 text-indigo-400" /> Detalles de Operación y Parámetros
                 </h5>
                 <p className="text-xs text-zinc-400 leading-relaxed font-sans">
                   {activeTab === "get" && (
-                    "Este endpoint recupera todos los registros de la tabla. Al resolver la respuesta, cada fila se devuelve con sus identificadores de campo físicos (ej. col_5_0) y también mapeada dinámicamente de forma limpia a sus nombres humanos (ej. 'nombre' o 'Nombre') con conversión automática a tipos estándar. Esto te permite leer los datos en n8n sin mapeos complejos de IDs."
+                    <>
+                      Por defecto, este endpoint devuelve cada fila de forma limpia <strong className="text-zinc-200">únicamente con sus nombres humanos de columna</strong> (ej: <code className="text-emerald-300 font-mono text-[11px]">"Nombre": "Martinez Rufina"</code>) para evitar triplicados redundantes. Si requieres otros formatos, puedes usar el parámetro <code className="text-indigo-300 font-mono text-[11px]">?view=</code>:
+                      <span className="block mt-2 pl-3 border-l-2 border-indigo-500/50 space-y-1 bg-zinc-950/45 p-2 rounded-lg font-mono text-[10.5px]">
+                        <span>• <b className="text-indigo-400">?view=human</b> : Formato limpio por defecto (Nombres Exactos).</span><br/>
+                        <span>• <b className="text-indigo-400">?view=api</b> : Nombres en minúsculas sanitizados (<code className="text-zinc-300">"fecha_de_cirugia"</code>).</span><br/>
+                        <span>• <b className="text-indigo-400">?view=id</b> : IDs físicos originales de columna (<code className="text-zinc-300">"col_5_0"</code>).</span><br/>
+                        <span>• <b className="text-indigo-400">?view=all</b> : Mapeo completo (los 3 formatos de forma simultánea).</span>
+                      </span>
+                    </>
                   )}
                   {activeTab === "post" && (
-                    "Este endpoint inserta un nuevo registro en la grilla y persiste sobre la base local JSON. Admite claves tanto en ID de columna ('col_5_0') como el nombre real ('Nombre' o 'nombre'). Si un campo se omite, se asigna un valor nulo o por defecto según su tipo de dato de forma completamente segura."
+                    <>
+                      Inserta un nuevo registro en la base de datos de forma segura. El backend es inteligente: <strong className="text-indigo-350">¡NO necesitas triplicar los datos en el Body!</strong> Solo mapea los campos usando la opción que te quede más cómoda (Nombre de Columna humano o sanitizado o ID físico). El servidor automáticamente lo agrupará y guardará de manera unificada.
+                    </>
                   )}
                   {activeTab === "patch" && (
-                    "Este endpoint actualiza los campos especificados de un registro existente mediante su ID de fila física. No requiere que envíes todo el JSON, solo los campos que deseas modificar. Admite claves en nomenclatura tanto física de columna como el nombre humano."
+                    <>
+                      Actualiza parcialmente un registro por su ID de fila física. Al igual que en inserción, el backend inteligente procesa el par clave/valor usando cualquiera de las nomenclaturas que envíes. No necesitas duplicar nada ni enviar los campos que no vas a modificar.
+                    </>
                   )}
                   {activeTab === "delete" && (
-                    "Este endpoint elimina de forma permanente el registro que coincida con el ID enviado por parámetro. La eliminación se ejecuta en cascada en la base de datos local y queda registrada en las bitácoras de auditoría de este workspace."
+                    "Elimina permanentemente el registro coincidente con el ID por parámetro en cascada de forma inmediata."
                   )}
                 </p>
               </div>

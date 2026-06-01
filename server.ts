@@ -785,17 +785,31 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla con el identificador o nombre '${tableName}' no existe en esta Base de Datos.` });
       }
 
-      // Convertir filas internas (col_xxx) a un mapeado dual que incluye tanto column ID como nombres limpios para n8n
+      // Convertir filas internas (col_xxx) a un mapeado limpio
+      // Por defecto ("human"), devolvemos únicamente el par "Nombre de Columna Humana": valor para una salida libre de redundancias.
+      // Modificable con ?view=api (formato api amigable), ?view=id (IDs de columna) o ?view=all (retrocompatibilidad completa).
+      const viewMode = (req.query.view || "human").toString().toLowerCase();
+
       const mappedRows = (table.rows || []).map(row => {
         const mappedRow: any = { id: row.id };
         table.columns.forEach(col => {
           const val = row[col.id];
-          // Soportar el ID físico original (ej. col_5_0)
-          mappedRow[col.id] = val;
-          // Soportar el nombre exacto de la columna humana (ej. "Nombre")
-          mappedRow[col.name] = val;
-          // Soportar el nombre físico sanitizado (ej. "nombre" o "fecha_de_cirugia")
-          mappedRow[sanitizePhysicalName(col.name)] = val;
+          
+          if (viewMode === "api") {
+            // "nombre", "obra_social", "fecha_de_cirugia"
+            mappedRow[sanitizePhysicalName(col.name)] = val;
+          } else if (viewMode === "id") {
+            // "col_5_0", "col_20_6"
+            mappedRow[col.id] = val;
+          } else if (viewMode === "all") {
+            // Mantiene las tres opciones para máxima retrocompatibilidad si es necesario
+            mappedRow[col.id] = val;
+            mappedRow[col.name] = val;
+            mappedRow[sanitizePhysicalName(col.name)] = val;
+          } else {
+            // "human" (Por defecto) - Súper limpio: "Nombre", "Obra social", "Patología", "Laboratorio"
+            mappedRow[col.name] = val;
+          }
         });
         return mappedRow;
       });
