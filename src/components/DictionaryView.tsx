@@ -8,9 +8,10 @@ import {
 interface DictionaryViewProps {
   table: TableSchema;
   onEditColumn: (columnId: string, name: string, type: ColumnType, options?: string[], varcharLength?: number) => Promise<void>;
+  onSetPrimaryColumn: (columnId: string) => Promise<void>;
 }
 
-export default function DictionaryView({ table, onEditColumn }: DictionaryViewProps) {
+export default function DictionaryView({ table, onEditColumn, onSetPrimaryColumn }: DictionaryViewProps) {
   const [selectedRowId, setSelectedRowId] = useState<string>("");
 
   // Edit Column State
@@ -296,14 +297,28 @@ export default function DictionaryView({ table, onEditColumn }: DictionaryViewPr
                       </div>
                       
                       {!isPrimaryKey && (
-                        <button
-                          onClick={() => handleStartEdit(col)}
-                          className="p-1.5 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/40 transition-all cursor-pointer"
-                          title="Configurar restricciones y opciones de columna"
-                          id={`btn-edit-col-dict-${col.id}`}
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1.5 ml-1">
+                          <button
+                            onClick={async () => {
+                              if (confirm(`¿Estás seguro de que deseas establecer '${col.name}' como la columna identificadora principal de la tabla? Esto cambiará el campo principal que se muestra en tus vistas.`)) {
+                                await onSetPrimaryColumn(col.id);
+                              }
+                            }}
+                            className="p-1 px-2 font-sans text-[10px] font-semibold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
+                            title="Hacer columna identificadora principal (PK)"
+                          >
+                            <Key className="w-3 h-3" /> Hacer PK
+                          </button>
+
+                          <button
+                            onClick={() => handleStartEdit(col)}
+                            className="p-1.5 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800/40 transition-all cursor-pointer"
+                            title="Configurar restricciones y opciones de columna"
+                            id={`btn-edit-col-dict-${col.id}`}
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>

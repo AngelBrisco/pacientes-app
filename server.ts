@@ -1713,6 +1713,48 @@ async function startServer() {
     res.json(db);
   });
 
+  // Establecer columna como identificadora principal (moverla al índice 0)
+  app.put("/api/db/tables/:tableId/primary-column/:columnId", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede cambiar la columna identificadora." });
+    }
+
+    const currentUser = auth.user.name;
+    const { tableId, columnId } = req.params;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    const colIndex = table.columns.findIndex(c => c.id === columnId);
+    if (colIndex === -1) {
+      return res.status(404).json({ error: "Columna no encontrada." });
+    }
+
+    const [col] = table.columns.splice(colIndex, 1);
+    table.columns.unshift(col); // Mover al primer elemento (índice 0)
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: currentUser,
+      action: "SCHEMA_CHANGE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Se estableció la columna '${col.name}' como la columna identificadora principal de la tabla '${table.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
   // API de Carga Masiva de Filas (Importación CSV)
   app.post("/api/db/tables/:tableId/bulk-rows", async (req, res) => {
     const db = await loadDb();
