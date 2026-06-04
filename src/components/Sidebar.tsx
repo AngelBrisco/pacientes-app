@@ -36,6 +36,39 @@ export default function Sidebar({
   const [importSuccessMessage, setImportSuccessMessage] = useState("");
   const [deletingTableId, setDeletingTableId] = useState<string | null>(null);
 
+  // Estados para filtro e historial completo del Audit Trail
+  const [sidebarTabFilter, setSidebarTabFilter] = useState("all");
+  const [showAllLogsModal, setShowAllLogsModal] = useState(false);
+  const [modalTableFilter, setModalTableFilter] = useState("all");
+  const [modalSearchQuery, setModalSearchQuery] = useState("");
+
+  const filteredSidebarLogs = logs.filter(log => {
+    if (sidebarTabFilter === "all") return true;
+    if (sidebarTabFilter === "general") {
+      return log.tableId === "users" || log.tableId === "*" || !log.tableId;
+    }
+    return log.tableId === sidebarTabFilter;
+  });
+
+  const filteredModalLogs = [...logs].reverse().filter(log => {
+    if (modalTableFilter !== "all") {
+      if (modalTableFilter === "general") {
+        const isGeneral = log.tableId === "users" || log.tableId === "*" || !log.tableId;
+        if (!isGeneral) return false;
+      } else {
+        if (log.tableId !== modalTableFilter) return false;
+      }
+    }
+    if (modalSearchQuery.trim()) {
+      const q = modalSearchQuery.toLowerCase();
+      const matchDetails = log.details?.toLowerCase().includes(q);
+      const matchUser = log.user?.toLowerCase().includes(q);
+      const matchTable = log.tableName?.toLowerCase().includes(q);
+      return matchDetails || matchUser || matchTable;
+    }
+    return true;
+  });
+
   const resetFormStates = () => {
     setNewTableName("");
     setImportMethod("none");
@@ -395,25 +428,40 @@ export default function Sidebar({
               })}
             </div>
           )}
-        </div>
-
-        {/* SECTION 2: Persistent Audit Trail Logs */}
+              {/* SECTION 2: Persistent Audit Trail Logs */}
         {isAdmin && (
-          <div className="pt-4 border-t border-zinc-900">
-            <div className="flex items-center justify-between px-2 mb-3">
+          <div className="pt-4 border-t border-zinc-900 col-span-1">
+            <div className="flex items-center justify-between px-2 mb-2">
               <span className="font-mono text-[10.5px] uppercase font-bold text-zinc-500 tracking-widest flex items-center gap-1.5">
                 <History className="w-3.5 h-3.5 text-indigo-400" /> Audit Trail (Historial)
               </span>
-              <span className="font-mono text-[9px] text-zinc-600 font-bold bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded-full">
+              <span className="font-mono text-[9px] text-zinc-650 font-bold bg-zinc-950 border border-zinc-900 px-1.5 py-0.5 rounded-full">
                 {logs.length}
               </span>
             </div>
 
-            <div className="space-y-3.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar text-[11px]" id="audit-trail-scroller">
-              {logs.length === 0 ? (
-                <div className="text-center py-6 text-zinc-650">No hay logs registrados en audit.</div>
+            {/* Sidebar quick selector organizer */}
+            <div className="px-1.5 mb-3">
+              <select
+                id="sidebar-log-table-organizer"
+                value={sidebarTabFilter}
+                onChange={(e) => setSidebarTabFilter(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-900/80 rounded-lg text-[10.5px] font-sans px-2.5 py-1.5 text-zinc-400 outline-none focus:ring-1 focus:ring-indigo-505 cursor-pointer"
+                title="Filtrar eventos por tabla"
+              >
+                <option value="all">📁 Mostrar todas las tablas</option>
+                <option value="general">⚙️ Cambios de sistema y accesos</option>
+                {tables.map(t => (
+                  <option key={t.id} value={t.id}>📊 Tabla: {t.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-3 max-h-52 overflow-y-auto pr-1 custom-scrollbar text-[11px]" id="audit-trail-scroller">
+              {filteredSidebarLogs.length === 0 ? (
+                <div className="text-center py-8 text-zinc-650 text-xs italic">No hay logs para el filtro seleccionado.</div>
               ) : (
-                [...logs].reverse().slice(0, 15).map((log) => {
+                [...filteredSidebarLogs].reverse().slice(0, 15).map((log) => {
                   const isSchema = log.action === "SCHEMA_CHANGE";
                   const isDelete = log.action === "DELETE";
                   const isCreate = log.action === "CREATE";
@@ -429,20 +477,20 @@ export default function Sidebar({
                   return (
                     <div
                       key={log.id}
-                      className="p-2.5 bg-zinc-900/30 border border-zinc-900/60 rounded-xl space-y-1.5"
+                      className="p-2.5 bg-zinc-900/30 border border-zinc-905/70 rounded-xl space-y-1.5"
                       id={`log-item-${log.id}`}
                     >
                       <div className="flex items-center justify-between text-[10px]">
                         <span className={`px-1.5 py-0.2 rounded border text-[8.5px] font-mono uppercase font-semibold ${badgeColor}`}>
                           {log.action}
                         </span>
-                        <span className="text-zinc-600 font-mono font-medium">{formatTime(log.timestamp)}</span>
+                        <span className="text-zinc-650 font-mono font-medium">{formatTime(log.timestamp)}</span>
                       </div>
-                      <p className="text-zinc-300 font-sans leading-relaxed break-words">{log.details}</p>
-                      <div className="flex items-center gap-1 text-zinc-500 text-[10px] bg-zinc-950/40 p-1 rounded border border-zinc-900">
+                      <p className="text-zinc-350 font-sans leading-relaxed break-words">{log.details}</p>
+                      <div className="flex items-center gap-1 text-zinc-550 text-[10px] bg-zinc-950/40 p-1 rounded border border-zinc-900">
                         <User className="w-2.5 h-2.5 text-indigo-400" />
                         <span className="font-medium truncate text-zinc-400">{log.user}</span>
-                        <span className="text-zinc-600 select-none">•</span>
+                        <span className="text-zinc-750 select-none">•</span>
                         <span className="truncate max-w-[50%] text-[9.5px] font-mono text-zinc-500">{log.tableName}</span>
                       </div>
                     </div>
@@ -450,8 +498,134 @@ export default function Sidebar({
                 })
               )}
             </div>
+
+            {/* View Full History Button */}
+            <button
+              onClick={() => setShowAllLogsModal(true)}
+              className="w-full mt-3 py-2 bg-indigo-600/10 hover:bg-indigo-600/15 border border-indigo-500/20 text-indigo-400 rounded-lg text-[10.5px] font-sans font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>Ver Historial Completo</span>
+            </button>
           </div>
         )}
+
+      </div>
+
+      {/* Modal Historial Completo */}
+      {showAllLogsModal && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-850 rounded-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-zinc-850 flex items-center justify-between bg-zinc-950/30">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-600/15 border border-indigo-500/25 text-indigo-400 rounded-lg">
+                  <History className="w-5 h-5 text-indigo-500" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-100 font-sans">Historial Completo de Transacciones (Audit Trail)</h3>
+                  <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Bitácora Global inalterable de auditoría estructurada</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAllLogsModal(false)}
+                className="p-1 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-350 hover:text-zinc-100 text-xs font-bold rounded-lg cursor-pointer transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {/* Modal Controls / Filters */}
+            <div className="p-4 bg-zinc-950/45 border-b border-zinc-850 flex flex-col md:flex-row gap-3 items-center justify-between">
+              <div className="flex flex-1 items-center gap-2 w-full md:w-auto">
+                <span className="text-[10.5px] font-mono text-zinc-400 uppercase font-semibold shrink-0">Organizar por tabla:</span>
+                <select
+                  value={modalTableFilter}
+                  onChange={(e) => setModalTableFilter(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 rounded-lg text-xs p-2 text-zinc-300 outline-none focus:ring-1 focus:ring-indigo-500 min-w-[200px]"
+                >
+                  <option value="all">🔍 Todas las tablas y eventos</option>
+                  <option value="general">⚙️ Control del Sistema / Accesos</option>
+                  {tables.map(t => (
+                    <option key={t.id} value={t.id}>📊 Tabla: {t.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <span className="text-[10.5px] font-mono text-zinc-400 uppercase font-semibold shrink-0">Buscar:</span>
+                <input
+                  type="text"
+                  placeholder="Buscar en descripción de cambios..."
+                  value={modalSearchQuery}
+                  onChange={(e) => setModalSearchQuery(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 rounded-lg text-xs px-3 py-2 text-zinc-100 outline-none focus:ring-1 focus:ring-indigo-500 w-full sm:w-64"
+                />
+              </div>
+            </div>
+
+            {/* Modal logs scroller / view */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-3.5 custom-scrollbar bg-zinc-950/10">
+              {filteredModalLogs.length === 0 ? (
+                <div className="text-center py-16 text-zinc-650 flex flex-col items-center justify-center space-y-2">
+                  <History className="w-10 h-10 text-zinc-750" />
+                  <span className="font-semibold text-zinc-400">No se encontraron logs que coincidan con los filtros.</span>
+                </div>
+              ) : (
+                filteredModalLogs.map((log) => {
+                  const isSchema = log.action === "SCHEMA_CHANGE";
+                  const isDelete = log.action === "DELETE";
+                  const isCreate = log.action === "CREATE";
+                  
+                  const badgeColor = isSchema 
+                    ? "bg-amber-500/10 text-amber-500 border-amber-500/20" 
+                    : isDelete 
+                      ? "bg-rose-500/10 text-rose-500 border-rose-500/20"
+                      : isCreate
+                        ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                        : "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+                  
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-3.5 bg-zinc-900/60 border border-zinc-800/70 rounded-xl space-y-2 hover:bg-zinc-900/80 transition-all shadow-sm"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded border text-[9px] font-mono uppercase font-bold tracking-wider ${badgeColor}`}>
+                            {log.action}
+                          </span>
+                          <span className="text-xs text-zinc-500 font-mono font-bold font-sans">ID: {log.id}</span>
+                        </div>
+                        <span className="text-zinc-500 font-mono text-xs">{new Date(log.timestamp).toLocaleString()}</span>
+                      </div>
+                      <p className="text-zinc-200 font-sans text-xs leading-relaxed">{log.details}</p>
+                      <div className="flex items-center gap-3 text-zinc-550 text-[10.5px]">
+                        <span className="flex items-center gap-1 bg-zinc-950/60 p-1 px-2 rounded border border-zinc-900/80 text-zinc-405 font-medium">
+                          <User className="w-3.5 h-3.5 text-indigo-455" />
+                          <span>Usuario: <strong className="text-zinc-305 font-sans font-bold">{log.user}</strong></span>
+                        </span>
+                        {log.tableName && (
+                          <span className="flex items-center gap-1 bg-zinc-950/60 p-1 px-2 rounded border border-zinc-900/80 text-zinc-405 font-medium">
+                            <Layers className="w-3.5 h-3.5 text-indigo-455" />
+                            <span>Origen: <strong className="text-zinc-305 font-sans font-bold">{log.tableName}</strong></span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal footer stats */}
+            <div className="p-4 bg-zinc-950 border-t border-zinc-850 flex items-center justify-between text-zinc-500 font-mono text-[10.5px]">
+              <span>Bitácora total: <b>{logs.length}</b> entradas registradas</span>
+              <span>Filtrados: <b>{filteredModalLogs.length}</b></span>
+            </div>
+          </div>
+        </div>
+      )}
 
       </div>
 

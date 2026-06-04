@@ -175,6 +175,22 @@ export default function App() {
     await apiAction(`/api/db/snapshots/${id}`, "DELETE");
   };
 
+  const handleCreateScheduledRule = async (name: string, frequency: string, affectedTables: string[]) => {
+    await apiAction("/api/db/scheduled-snapshots", "POST", { name, frequency, affectedTables });
+  };
+
+  const handleDeleteScheduledRule = async (id: string) => {
+    await apiAction(`/api/db/scheduled-snapshots/${id}`, "DELETE");
+  };
+
+  const handleTriggerScheduledRule = async (id: string) => {
+    await apiAction(`/api/db/scheduled-snapshots/${id}/trigger`, "POST");
+  };
+
+  const handleToggleScheduledRuleActive = async (id: string, active: boolean) => {
+    await apiAction(`/api/db/scheduled-snapshots/${id}`, "PUT", { active });
+  };
+
   // DELETE TABLE
   const handleDeleteTable = async (tableId: string) => {
     await apiAction(`/api/db/tables/${tableId}`, "DELETE");
@@ -481,9 +497,15 @@ export default function App() {
           ) : activeView === "backups" ? (
             <BackupsView
               snapshots={dbState?.snapshots || []}
+              scheduledSnapshots={dbState?.scheduledSnapshots || []}
+              allTables={dbState?.tables || []}
               onTakeSnapshot={handleTakeSnapshot}
               onRestoreSnapshot={handleRestoreSnapshot}
               onDeleteSnapshot={handleDeleteSnapshot}
+              onCreateScheduledRule={handleCreateScheduledRule}
+              onDeleteScheduledRule={handleDeleteScheduledRule}
+              onTriggerScheduledRule={handleTriggerScheduledRule}
+              onToggleScheduledRuleActive={handleToggleScheduledRuleActive}
               isSyncing={isSyncing}
             />
           ) : !activeTable ? (

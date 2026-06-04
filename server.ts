@@ -335,7 +335,9 @@ function getInitialDbState(): DbState {
         role: "user",
         permissions: "read-only"
       }
-    ]
+    ],
+    snapshots: [],
+    scheduledSnapshots: []
   };
 }
 
@@ -375,6 +377,9 @@ async function loadDb(): Promise<DbState> {
       }
       if (!parsed.snapshots) {
         parsed.snapshots = [];
+      }
+      if (!parsed.scheduledSnapshots) {
+        parsed.scheduledSnapshots = [];
       }
       
       // trigger background sync so postgres is populated on load if it is empty
@@ -1210,7 +1215,8 @@ async function startServer() {
       name: name.trim(),
       timestamp: new Date().toISOString(),
       creator: auth.user.name,
-      tables: JSON.parse(JSON.stringify(db.tables))
+      tables: JSON.parse(JSON.stringify(db.tables)),
+      affectedTables: ["*"] // Respaldo del esquema completo por defecto
     };
 
     if (!db.snapshots) {
@@ -1247,7 +1253,35 @@ async function startServer() {
       return res.status(404).json({ error: "Copia de seguridad (Snapshot) no encontrada." });
     }
 
-    db.tables = JSON.parse(JSON.stringify(snapshot.tables));
+    // Restauración selectiva/incremental si el snapshot detalla tablas particulares
+    let isSelective = false;
+    let detailsMsg = `Se restauró la base de datos a la copia de seguridad (Snapshot) '${snapshot.name}' creada el ${new Date(snapshot.timestamp).toLocaleString()}.`;
+    
+    if (snapshot.affectedTables && !snapshot.affectedTables.includes("*")) {
+      isSelective = true;
+      const affectedSet = new Set(snapshot.affectedTables);
+      
+      // Reemplazar solo las tablas que estaban en el snapshot y marcadas como afectadas
+      db.tables = db.tables.map(t => {
+        if (affectedSet.has(t.id)) {
+          const restoredTable = snapshot.tables.find(st => st.id === t.id);
+          return restoredTable || t;
+        }
+        return t;
+      });
+
+      // Si una tabla restaurada fue borrada previamente de la base de datos viva, la reincorporamos
+      snapshot.tables.forEach(st => {
+        if (affectedSet.has(st.id) && !db.tables.some(t => t.id === st.id)) {
+          db.tables.push(st);
+        }
+      });
+
+      detailsMsg = `Se realizó una restauración selectiva/incremental desde la copia '${snapshot.name}'. Tablas afectadas restablecidas: ${snapshot.tables.map(st => `'${st.name}'`).join(", ")}.`;
+    } else {
+      // Reemplace total de todas las tablas por defecto (histórico)
+      db.tables = JSON.parse(JSON.stringify(snapshot.tables));
+    }
 
     db.logs.push({
       id: "log_" + Date.now(),
@@ -1256,7 +1290,7 @@ async function startServer() {
       action: "SCHEMA_CHANGE",
       tableId: "*",
       tableName: "Base de Datos",
-      details: `Se restauró la base de datos a la copia de seguridad (Snapshot) '${snapshot.name}' creada el ${new Date(snapshot.timestamp).toLocaleString()}.`
+      details: detailsMsg
     });
 
     await saveDb(db);
@@ -1290,6 +1324,261 @@ async function startServer() {
       tableId: "*",
       tableName: "Base de Datos",
       details: `Se eliminó la copia de seguridad (Snapshot) '${deletedSnap.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Helper para calcular la siguiente corrida programada
+  function getNextScheduledRun(frequency: string): string {
+    const d = new Date();
+    if (frequency === "hourly") {
+      d.setHours(d.getHours() + 1);
+    } else if (frequency === "daily") {
+      d.setDate(d.getDate() + 1);
+    } else if (frequency === "weekly") {
+      d.setDate(d.getDate() + 7);
+    } else {
+      d.setDate(d.getDate() + 1);
+    }
+    return d.toISOString();
+  }
+
+  // Tarea de Background para disparar Snapshots Automáticos programados
+  function startScheduledSnapshotsWorker() {
+    console.log("[Worker] Inicializando sistema de copias de seguridad programadas automáticas (30s interval)...");
+    setInterval(async () => {
+      try {
+        const db = await loadDb();
+        if (!db.scheduledSnapshots || db.scheduledSnapshots.length === 0) return;
+        
+        let changed = false;
+        const now = new Date();
+
+        for (const rule of db.scheduledSnapshots) {
+          if (!rule.active) continue;
+          
+          let shouldRun = false;
+          if (rule.nextRun) {
+            shouldRun = new Date(rule.nextRun) <= now;
+          } else {
+            shouldRun = true;
+          }
+
+          if (shouldRun) {
+            // Disparar copia de seguridad programada instantánea
+            const isAll = rule.affectedTables.includes("*");
+            const filteredTables = isAll
+              ? db.tables
+              : db.tables.filter(t => rule.affectedTables.includes(t.id));
+
+            const snapshotName = `[Programado] ${rule.name}`;
+            const newSnapshot = {
+              id: "snap_" + Date.now(),
+              name: snapshotName,
+              timestamp: now.toISOString(),
+              creator: "Sistema Automático",
+              tables: JSON.parse(JSON.stringify(filteredTables)),
+              affectedTables: rule.affectedTables
+            };
+
+            if (!db.snapshots) db.snapshots = [];
+            db.snapshots.push(newSnapshot);
+
+            rule.lastRun = now.toISOString();
+            rule.nextRun = getNextScheduledRun(rule.frequency);
+
+            db.logs.push({
+              id: "log_" + Date.now(),
+              timestamp: now.toISOString(),
+              user: "Sistema Automático",
+              action: "SCHEMA_CHANGE",
+              tableId: "*",
+              tableName: "Base de Datos",
+              details: `Copia programada ejecutada: '${rule.name}'. Se respaldaron ${filteredTables.length} tabla(s) de forma incremental/desduplicada.`
+            });
+
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          await saveDb(db);
+          console.log("[Worker] Base de datos guardada tras ejecución programada automática.");
+        }
+      } catch (err) {
+        console.error("[Worker Error] Excepción en worker de copias programadas:", err);
+      }
+    }, 1000 * 30);
+  }
+
+  // Iniciar el worker de copias programadas
+  startScheduledSnapshotsWorker();
+
+  // API para Listar Tareas de snapshots programadas
+  app.get("/api/db/scheduled-snapshots", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Solo administradores pueden previsualizar tareas programadas." });
+    }
+    res.json(db.scheduledSnapshots || []);
+  });
+
+  // API para Crear una Tarea de Snapshot programado
+  app.post("/api/db/scheduled-snapshots", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { name, frequency, affectedTables } = req.body;
+    if (!name || !frequency || !affectedTables) {
+      return res.status(400).json({ error: "El nombre, frecuencia y tablas afectadas son parámetros requeridos." });
+    }
+
+    const newRule = {
+      id: "sched_" + Date.now(),
+      name: name.trim(),
+      frequency, // "hourly" | "daily" | "weekly"
+      affectedTables, // ["*"] o ["tbl_xxx"]
+      active: true,
+      creator: auth.user.name,
+      nextRun: getNextScheduledRun(frequency)
+    };
+
+    if (!db.scheduledSnapshots) db.scheduledSnapshots = [];
+    db.scheduledSnapshots.push(newRule);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se configuró la tarea programada de snapshot '${newRule.name}' (${frequency}).`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // API para Actualizar/Alternar una Tarea de Snapshot programado
+  app.put("/api/db/scheduled-snapshots/:ruleId", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { ruleId } = req.params;
+    const { name, frequency, affectedTables, active } = req.body;
+
+    if (!db.scheduledSnapshots) db.scheduledSnapshots = [];
+    const rule = db.scheduledSnapshots.find(r => r.id === ruleId);
+    if (!rule) {
+      return res.status(404).json({ error: "Tarea programada no encontrada." });
+    }
+
+    if (name !== undefined) rule.name = name.trim();
+    if (frequency !== undefined) {
+      rule.frequency = frequency;
+      rule.nextRun = getNextScheduledRun(frequency);
+    }
+    if (affectedTables !== undefined) rule.affectedTables = affectedTables;
+    if (active !== undefined) rule.active = active;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se modificaron parámetros de la tarea programada '${rule.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // API para Eliminar una Tarea de Snapshot programado
+  app.delete("/api/db/scheduled-snapshots/:ruleId", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { ruleId } = req.params;
+    if (!db.scheduledSnapshots) db.scheduledSnapshots = [];
+    const idx = db.scheduledSnapshots.findIndex(r => r.id === ruleId);
+    if (idx === -1) {
+      return res.status(404).json({ error: "Tarea programada no encontrada." });
+    }
+
+    const deletedRule = db.scheduledSnapshots.splice(idx, 1)[0];
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se eliminó la tarea programada de snapshot '${deletedRule.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // API para Forzar ejecución manual e instantánea de una Tarea de Snapshot programada
+  app.post("/api/db/scheduled-snapshots/:ruleId/trigger", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { ruleId } = req.params;
+    if (!db.scheduledSnapshots) db.scheduledSnapshots = [];
+    const rule = db.scheduledSnapshots.find(r => r.id === ruleId);
+    if (!rule) {
+      return res.status(404).json({ error: "Tarea programada no encontrada." });
+    }
+
+    const isAll = rule.affectedTables.includes("*");
+    const filteredTables = isAll
+      ? db.tables
+      : db.tables.filter(t => rule.affectedTables.includes(t.id));
+
+    const newSnapshot = {
+      id: "snap_" + Date.now(),
+      name: `[Manual run] ${rule.name}`,
+      timestamp: new Date().toISOString(),
+      creator: auth.user.name,
+      tables: JSON.parse(JSON.stringify(filteredTables)),
+      affectedTables: rule.affectedTables
+    };
+
+    if (!db.snapshots) db.snapshots = [];
+    db.snapshots.push(newSnapshot);
+
+    rule.lastRun = new Date().toISOString();
+    rule.nextRun = getNextScheduledRun(rule.frequency);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se forzó ejecución manual de la tarea '${rule.name}'. Respaldadas ${filteredTables.length} tablas.`
     });
 
     await saveDb(db);

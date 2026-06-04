@@ -46,6 +46,18 @@ export interface Snapshot {
   timestamp: string;
   creator: string;
   tables: TableSchema[];
+  affectedTables?: string[]; // Array of table IDs affected/backed up in selective snaps
+}
+
+export interface ScheduledSnapshot {
+  id: string;
+  name: string;
+  frequency: 'hourly' | 'daily' | 'weekly';
+  affectedTables: string[]; // ["*"] or specific table IDs
+  active: boolean;
+  lastRun?: string;
+  nextRun?: string;
+  creator: string;
 }
 
 export interface DbState {
@@ -53,4 +65,5 @@ export interface DbState {
   logs: AuditLog[];
   users?: UserAccount[];
   snapshots?: Snapshot[];
+  scheduledSnapshots?: ScheduledSnapshot[];
 }
