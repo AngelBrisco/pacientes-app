@@ -9,11 +9,15 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Canal de persistencia local para la base de datos JSON y adjuntos subidos
-      - ./nococlone_data:/app/data
+      # Canal de persistencia persistente para la base de datos JSON y adjuntos subidos (Volumen Nombrado)
+      - nococlone_data:/app/data
     environment:
       - NODE_ENV=production
       - GEMINI_API_KEY=tu_api_key_opcional
     restart: unless-stopped
+
+volumes:
+  nococlone_data:
+    driver: local
 
 
