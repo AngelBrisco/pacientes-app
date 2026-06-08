@@ -48,9 +48,9 @@ function getPgPool(): pg.Pool | null {
 }
 
 function isPostgresEnabled(): boolean {
-  // Desactivado por completo el uso de la base de datos SQL Postgres secundaria.
-  // Ahora usamos la API propia de NocoClone que lee directamente de la base local JSON (guardando el 100% de los registros).
-  return false;
+  // Se habilita la sincronización relacional de forma dinámica si se detecta DATABASE_URL o PGHOST.
+  // El motor de NocoClone opera sobre JSON local de manera síncrona y replica/reconstruye a PostgreSQL en segundo plano automáticamente.
+  return getPgPool() !== null;
 }
 
 // Funciones de sanitarización y mapeo a nombres físicos SQL limpios (para n8n, etc.)
@@ -341,8 +341,113 @@ function getInitialDbState(): DbState {
   };
 }
 
+async function restoreDbStateFromPostgres(): Promise<DbState | null> {
+  const pool = getPgPool();
+  if (!pool) return null;
+
+  try {
+    console.log("[Postgres Recovery] Intentando recuperar base de datos completa desde PostgreSQL...");
+    await ensureMetadataTable();
+
+    // 1. Obtener esquemas y metadatos de las tablas
+    const tablesMeta = await getMetadataValue("tables_metadata", null);
+    if (!tablesMeta || !Array.isArray(tablesMeta)) {
+      console.log("[Postgres Recovery] No se encontraron esquemas de tablas guardados en Postgres para restaurar.");
+      return null;
+    }
+
+    // 2. Recuperar el resto de colecciones de metadatos de control
+    const users = await getMetadataValue("users", []);
+    const logs = await getMetadataValue("logs", []);
+    const snapshots = await getMetadataValue("snapshots", []);
+    const scheduledSnapshots = await getMetadataValue("scheduledSnapshots", []);
+
+    const tables: TableSchema[] = [];
+
+    // 3. Reconstruir filas físicas de cada tabla mapeándolas de vuelta
+    for (const tableMeta of tablesMeta) {
+      const tableObj: TableSchema = {
+        ...tableMeta,
+        rows: []
+      };
+
+      const physTableName = getPhysicalTableName(tableMeta);
+      try {
+        console.log(`[Postgres Recovery] Reconstruyendo registros de la tabla física '${physTableName}'...`);
+        const rowsRes = await pool.query(`SELECT * FROM "${physTableName}"`);
+        
+        for (const pgRow of rowsRes.rows) {
+          const rowObj: any = { id: pgRow.id };
+          for (const col of tableMeta.columns) {
+            const physColName = getPhysicalColumnName(col);
+            const rawVal = pgRow[physColName];
+            
+            if (rawVal === undefined || rawVal === null) {
+              rowObj[col.id] = null;
+            } else if (col.type === "number") {
+              rowObj[col.id] = Number(rawVal);
+            } else if (col.type === "boolean") {
+              rowObj[col.id] = (rawVal === true || String(rawVal) === "true" || String(rawVal) === "1" || String(rawVal).toLowerCase() === "t");
+            } else {
+              rowObj[col.id] = String(rawVal);
+            }
+          }
+          tableObj.rows.push(rowObj);
+        }
+      } catch (err) {
+        console.error(`[Postgres Recovery] Alerta: No se pudo leer la tabla física '${physTableName}':`, err);
+        tableObj.rows = [];
+      }
+      tables.push(tableObj);
+    }
+
+    const recoveredState: DbState = {
+      tables,
+      logs,
+      users,
+      snapshots,
+      scheduledSnapshots
+    };
+
+    console.log(`[Postgres Recovery] Éxito: Base de datos recuperada desde Postgres con ${tables.length} tablas y ${snapshots.length} snapshots.`);
+    return recoveredState;
+  } catch (err) {
+    console.error("[Postgres Recovery] Falló de forma general la recuperación de base de datos desde Postgres:", err);
+    return null;
+  }
+}
+
 async function loadDb(): Promise<DbState> {
   try {
+    let isDefaultOrMissing = !fs.existsSync(DB_FILE_PATH);
+    
+    // Si el archivo existe localmente en el contenedor, comprobamos si contiene la plantilla por defecto estática.
+    // Esto previene que se sobrescriban los datos persistentes guardados en Postgres con la plantilla inicial default de compilación.
+    if (fs.existsSync(DB_FILE_PATH)) {
+      try {
+        const data = fs.readFileSync(DB_FILE_PATH, "utf-8");
+        const parsed = JSON.parse(data);
+        if (
+          (!parsed.snapshots || parsed.snapshots.length === 0) && 
+          (!parsed.tables || parsed.tables.length <= 2) && 
+          (!parsed.logs || parsed.logs.length <= 1) &&
+          (!parsed.scheduledSnapshots || parsed.scheduledSnapshots.length === 0)
+        ) {
+          isDefaultOrMissing = true;
+        }
+      } catch (err) {
+        isDefaultOrMissing = true;
+      }
+    }
+
+    if (isDefaultOrMissing && isPostgresEnabled()) {
+      const recovered = await restoreDbStateFromPostgres();
+      if (recovered) {
+        fs.writeFileSync(DB_FILE_PATH, JSON.stringify(recovered, null, 2), "utf-8");
+        return recovered;
+      }
+    }
+
     if (fs.existsSync(DB_FILE_PATH)) {
       const data = fs.readFileSync(DB_FILE_PATH, "utf-8");
       const parsed = JSON.parse(data);
