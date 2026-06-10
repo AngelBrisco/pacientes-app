@@ -77,7 +77,11 @@ export default function App() {
     if (!currentUser) return;
     if (!background) setLoading(true);
     try {
-      const res = await fetch("/api/db");
+      const res = await fetch("/api/db", {
+        headers: {
+          "x-user-username": currentUser.username,
+        }
+      });
       if (!res.ok) throw new Error("Error al consultar la base de datos.");
       const data: DbState = await res.json();
       setDbState(data);
