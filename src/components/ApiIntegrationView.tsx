@@ -39,7 +39,11 @@ export default function ApiIntegrationView({ table }: ApiIntegrationViewProps) {
     setTimeout(() => setCopiedText(""), 2000);
   };
 
-  // Find a column named 'key'
+  // La columna identificadora principal es la primera columna de la tabla (índice 0, ej: "Documento" o "Número de cliente")
+  const primaryCol = table.columns?.[0];
+  const primaryColName = primaryCol ? primaryCol.name : "id";
+
+  // Find a column named 'key' (fallback)
   const keyCol = table.columns.find(c => 
     c.name.toLowerCase() === "key" || 
     c.id.toLowerCase() === "key" || 
@@ -156,7 +160,8 @@ export default function ApiIntegrationView({ table }: ApiIntegrationViewProps) {
   // AI Agent System Prompt Generator
   const generateAgentPrompt = () => {
     const columnsDescription = table.columns.map(c => `- ${c.name} (${c.type}${c.options ? `: ${c.options.join(", ")}` : ""})`).join("\r\n");
-    const hasKey = !!keyCol;
+    const primaryName = table.columns[0]?.name || "id";
+    const exampleVal = table.rows[0]?.[table.columns[0]?.id] || "VAL_EJEMPLO";
     
     return `### CONTEXTO DE INTEGRACIÓN AI CO-PILOT
 Estás interactuando en tiempo real con la Base de Datos NocoClone llamada "nococlone".
@@ -164,6 +169,7 @@ Tu objetivo es realizar consultas, inserciones, actualizaciones o eliminaciones 
 
 #### INFORMACIÓN DE LA TABLA
 - **Nombre de la tabla**: "${table.name}" (Slug de API: "${getTableNameForApi()}")
+- **Columna Identificadora Principal (Airtable-style Primary Column)**: "${primaryName}" (Cualquier búsqueda buscará automáticamente de forma inteligente en esta columna)
 - **Columnas Disponibles**:
 ${columnsDescription}
 
@@ -171,28 +177,28 @@ ${columnsDescription}
 
 1. **Listar filas (GET)**:
    \`GET /api/v1/db/data/v1/nococlone/${getTableNameForApi()}?view=human\`
-   *Recomendación*: Utiliza el parámetro \`?view=human\` para obtener los registros con las claves exactas en español de columnas humanas (ej: "Nombre", "Patología"), lo cual facilita su procesamiento.
+   *Recomendación*: Utiliza el parámetro \`?view=human\` para obtener los registros con las claves exactas de columnas (ej: "Nombre", "Patología"), lo cual facilita su procesamiento.
 
-2. **Obtener un registro individual (GET por ID o Key)**:
+2. **Obtener un registro individual (GET por ID o Identificador)**:
    \`GET /api/v1/db/data/v1/nococlone/${getTableNameForApi()}/:rowIdOrKey?view=human\`
-   *Importante*: Puedes buscar pasando el ID físico interno (ej: "row_1234567") O si la tabla cuenta con una columna llamada "key" (o "Key"), puedes buscar directamente por el valor de dicha columna (ej: "${keyCol ? "PAC-001" : "valor_de_tu_campo_key"}"). ¡El servidor lo resolverá inteligentemente!
+   *Importante*: Puedes buscar pasando el ID físico interno (ej: "row_1234567") O directamente por el valor de la columna identificadora principal "${primaryName}" (ej: "${exampleVal}"). ¡El servidor lo resolverá inteligentemente de forma automatizada!
 
 3. **Insertar Registro (POST)**:
    \`POST /api/v1/db/data/v1/nococlone/${getTableNameForApi()}\`
-   *Payload*: JSON con los nombres de las columnas sanitizados (minúsculas, sin espacios) o nombres exactos.
-   *Ejemplo*: { "nombre": "Marta Diaz", ${keyCol ? '"key": "PAC-999",' : ""} ... }
+   *Payload*: JSON con los nombres de las columnas sanitizados o exactos.
+   *Ejemplo*: { "${sanitizeName(primaryName)}": "${exampleVal}", ... }
 
-4. **Actualizar Registro Individual (PATCH por ID o Key)**:
+4. **Actualizar Registro Individual (PATCH por ID o Identificador)**:
    \`PATCH /api/v1/db/data/v1/nococlone/${getTableNameForApi()}/:rowIdOrKey\`
-   *Importante*: Modifica un paciente individual pasándole el ID físico o el valor del campo "key" en la URL. Solo envía los campos que deseas modificar en el JSON body. ¡El servidor los guardará directamente!
+   *Importante*: Modifica un registro pasándole en la URL el ID físico o el valor de la columna "${primaryName}". Solo envía los campos que deseas modificar en el JSON body.
 
-5. **Eliminar Registro Individual (DELETE por ID o Key)**:
+5. **Eliminar Registro Individual (DELETE por ID o Identificador)**:
    \`DELETE /api/v1/db/data/v1/nococlone/${getTableNameForApi()}/:rowIdOrKey\`
-   *Descripción*: Elimina de forma directa el registro coincidente con el ID físico o el campo "key" proporcionado en la URL.
+   *Descripción*: Elimina de forma directa el registro coincidente con el ID físico o el valor en la columna "${primaryName}" proporcionado.
 
 #### DIRECTIVAS DE COMPORTAMIENTO PARA HERMES / GEMINI:
 1. No inventes IDs si vas a actualizar o eliminar. Búscalos primero usando el GET.
-2. Si el usuario te pide un paciente 'PAC-001' y existe un campo "key", no busques su ID físico; simplemente invoca los endpoints individuales pasándole 'PAC-001' como el parámetro ':rowIdOrKey'. El backend resolverá la búsqueda automáticamente.
+2. Si el usuario te pide editar o borrar un registro con "${primaryName}" = "${exampleVal}", no busques su ID físico en la lista general; invoca los endpoints individuales pasándole "${exampleVal}" como el parámetro ':rowIdOrKey'. El backend resolverá la búsqueda automáticamente.
 3. El formato de las fechas debe ser siempre YYYY-MM-DD.`;
   };
 
@@ -509,9 +515,9 @@ ${columnsDescription}
                   2
                 </span>
                 <div className="space-y-1">
-                  <p className="text-xs font-bold text-zinc-200">Asigna campo "key" a tu tabla</p>
+                  <p className="text-xs font-bold text-zinc-200">Columna Identificadora</p>
                   <p className="text-[11px] text-zinc-400 leading-normal">
-                    Se recomienda que agregues una columna de tipo texto llamada <code className="text-emerald-300 font-mono text-[10px]">key</code> (en minúsculas/columna simple) para actuar como matrícula única legible (ej: PAC-102 o PAC-054).
+                    La primera columna de la tabla (ej: <strong className="text-zinc-300">"{primaryColName}"</strong>) actúa automáticamente como campo clave del negocio, siendo ideal como localizador para automatizaciones.
                   </p>
                 </div>
               </div>
@@ -534,16 +540,19 @@ ${columnsDescription}
           {/* Key Column Indicator */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4.5 space-y-3.5 shadow-sm">
             <h4 className="font-mono text-[10.5px] font-bold text-zinc-400 uppercase tracking-widest border-b border-zinc-800 pb-2 flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-indigo-455" /> Estado del campo clave "key"
+              <Layers className="w-3.5 h-3.5 text-indigo-455" /> Identificador Principal Activo
             </h4>
             <div className="space-y-2.5 font-sans">
-              {keyCol ? (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-505/20 rounded-xl flex items-start gap-2.5">
+              {primaryCol ? (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-550/20 rounded-xl flex items-start gap-2.5">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                   <div className="space-y-1">
-                    <p className="text-xs font-bold text-emerald-400">¡Tabla Optimizada!</p>
+                    <p className="text-xs font-bold text-emerald-400">¡Búsqueda Dual Activa!</p>
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Detectamos que la tabla actual tiene la columna <strong className="text-zinc-200">"{keyCol.name}"</strong>. Tus agentes ya pueden buscar, actualizar y eliminar registros de forma natural usando códigos del negocio en lugar de ids autogenerados.
+                      La columna <strong className="text-zinc-200">"{primaryColName}"</strong> (columna 1) es tu primary key lógica empresarial.
+                    </p>
+                    <p className="text-[10px] text-zinc-500 leading-relaxed mt-1">
+                      Cualquier consulta REST o Agente AI puede referenciar directamente sus valores (ej: "{table.rows[0]?.[primaryCol.id] || "VALOR"}") en herencias o URLs.
                     </p>
                   </div>
                 </div>
@@ -551,9 +560,9 @@ ${columnsDescription}
                 <div className="p-3 bg-amber-500/10 border border-amber-505/20 rounded-xl flex items-start gap-2.5">
                   <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div className="space-y-1">
-                    <p className="text-xs font-bold text-amber-405">Oportunidad de Mejora</p>
+                    <p className="text-xs font-bold text-amber-405">Sin Columnas</p>
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      No encontramos una columna llamada "key" en esta tabla. Te sugerimos crear una columna llamada <code className="text-zinc-205 font-mono text-[10px]">key</code> para poder invocar operaciones individuales por códigos de negocio en tus flujos de agente.
+                      Agrega al menos una columna a tu tabla para que actúe como Identificador Principal de negocio.
                     </p>
                   </div>
                 </div>

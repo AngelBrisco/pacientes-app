@@ -875,6 +875,50 @@ async function startServer() {
   //  PROPIA API DE ACCESO REST COMPATIBLE PARA n8n (estilo NocoDB / Airtable)
   // ==========================================
 
+  // Función inteligente para buscar el índice de una fila por ID o valor identificador
+  function findRowIndexInTable(table: any, searchKey: string): number {
+    if (!searchKey) return -1;
+    const cleanSearchKey = searchKey.trim().toLowerCase();
+
+    // 1. Coincidencia por ID interno absoluto (ej: row_12345)
+    let idx = table.rows.findIndex((r: any) => r.id === searchKey);
+    if (idx !== -1) return idx;
+
+    // 2. Coincidencia por la columna Identificadora Principal (Índice 0, ej: "Documento", "Numero de cliente")
+    if (table.columns && table.columns.length > 0) {
+      const primaryCol = table.columns[0];
+      idx = table.rows.findIndex((r: any) => {
+        const val = r[primaryCol.id];
+        return val !== undefined && val !== null && String(val).trim().toLowerCase() === cleanSearchKey;
+      });
+      if (idx !== -1) return idx;
+    }
+
+    // 3. Coincidencia por otras columnas indicadoras de clave comunes (ej: key, documento, dni, email...)
+    const keyIndicators = ["key", "documento", "dni", "numero", "codigo", "cliente", "numero_de_cliente", "email", "matricula"];
+    const matchedCols = table.columns.filter((c: any) => {
+      const nameLower = c.name.toLowerCase();
+      const idLower = c.id.toLowerCase();
+      const sanitizedName = sanitizePhysicalName(c.name);
+      return keyIndicators.some(ind => 
+        nameLower === ind || 
+        idLower === ind || 
+        sanitizedName === ind ||
+        nameLower.includes(ind)
+      );
+    });
+
+    for (const col of matchedCols) {
+      idx = table.rows.findIndex((r: any) => {
+        const val = r[col.id];
+        return val !== undefined && val !== null && String(val).trim().toLowerCase() === cleanSearchKey;
+      });
+      if (idx !== -1) return idx;
+    }
+
+    return -1;
+  }
+
   // 1. OBTENER FILAS (GET)
   app.get("/api/v1/db/data/v1/:projectName/:tableName", async (req, res) => {
     try {
@@ -945,7 +989,7 @@ async function startServer() {
     }
   });
 
-  // 1b. OBTENER FILA INDIVIDUAL (GET por ID o Key)
+  // 1b. OBTENER FILA INDIVIDUAL (GET por ID o Identificador)
   app.get("/api/v1/db/data/v1/:projectName/:tableName/:rowId", async (req, res) => {
     try {
       const db = await loadDb();
@@ -963,21 +1007,11 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla con el identificador o nombre '${tableName}' no existe.` });
       }
 
-      let existingRow = table.rows.find(r => r.id === rowId);
-      if (!existingRow) {
-        const keyCol = table.columns.find(c => 
-          c.name.toLowerCase() === "key" || 
-          c.id.toLowerCase() === "key" || 
-          sanitizePhysicalName(c.name) === "key"
-        );
-        if (keyCol) {
-          existingRow = table.rows.find(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
-        }
+      const rIdx = findRowIndexInTable(table, rowId);
+      if (rIdx === -1) {
+        return res.status(404).json({ error: `La fila con el ID o Identificador (key, cédula, DNI/código) '${rowId}' no se encuentra en esta tabla.` });
       }
-
-      if (!existingRow) {
-        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no se encuentra en esta tabla.` });
-      }
+      const existingRow = table.rows[rIdx];
 
       const viewMode = (req.query.view || "human").toString().toLowerCase();
       const mappedRow: any = { id: existingRow.id };
@@ -1112,21 +1146,11 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
       }
 
-      let existingRow = table.rows.find(r => r.id === rowId);
-      if (!existingRow) {
-        const keyCol = table.columns.find(c => 
-          c.name.toLowerCase() === "key" || 
-          c.id.toLowerCase() === "key" || 
-          sanitizePhysicalName(c.name) === "key"
-        );
-        if (keyCol) {
-          existingRow = table.rows.find(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
-        }
+      const rIdx = findRowIndexInTable(table, rowId);
+      if (rIdx === -1) {
+        return res.status(404).json({ error: `La fila con el ID o Identificador (key, cédula, DNI/código) '${rowId}' no se encuentra en esta tabla.` });
       }
-
-      if (!existingRow) {
-        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no se encuentra en esta tabla.` });
-      }
+      const existingRow = table.rows[rIdx];
 
       const inputRow = req.body || {};
 
@@ -1205,20 +1229,10 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
       }
 
-      let rIdx = table.rows.findIndex(r => r.id === rowId);
-      if (rIdx === -1) {
-        const keyCol = table.columns.find(c => 
-          c.name.toLowerCase() === "key" || 
-          c.id.toLowerCase() === "key" || 
-          sanitizePhysicalName(c.name) === "key"
-        );
-        if (keyCol) {
-          rIdx = table.rows.findIndex(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
-        }
-      }
+      const rIdx = findRowIndexInTable(table, rowId);
 
       if (rIdx === -1) {
-        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no existe en esta tabla.` });
+        return res.status(404).json({ error: `La fila con el ID o Identificador (key, cédula, DNI/código) '${rowId}' no existe en esta tabla.` });
       }
 
       table.rows.splice(rIdx, 1);
