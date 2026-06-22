@@ -200,6 +200,11 @@ export default function App() {
     await apiAction(`/api/db/tables/${tableId}`, "DELETE");
   };
 
+  // RENAME TABLE
+  const handleRenameTable = async (tableId: string, name: string) => {
+    await apiAction(`/api/db/tables/${tableId}`, "PUT", { name });
+  };
+
   // ADD COLUMN
   const handleAddColumn = async (name: string, type: ColumnType, options?: string[]) => {
     if (!activeTableId) return;
@@ -281,6 +286,7 @@ export default function App() {
         onSelectTable={handleSelectTable}
         onCreateTable={handleCreateTable}
         onDeleteTable={handleDeleteTable}
+        onRenameTable={handleRenameTable}
         logs={dbState?.logs || []}
         readOnly={currentUser.permissions === "read-only"}
         isAdmin={currentUser.role === "admin"}
@@ -417,10 +423,10 @@ export default function App() {
                         ? "text-indigo-400 border-b-2 border-indigo-500"
                         : "text-zinc-505 hover:text-zinc-300"
                     }`}
-                    title="Integración API para n8n"
+                    title="Integración API REST para n8n y Agentes Inteligentes (Hermes)"
                   >
                     <Workflow className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Conexión n8n</span>
+                    <span className="hidden sm:inline">API REST</span>
                   </button>
                 </>
               )}

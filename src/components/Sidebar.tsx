@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Database, Plus, Trash2, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet, X } from "lucide-react";
+import { Database, Plus, Trash2, Edit2, Check, Layers, ShieldCheck, Terminal, ListTodo, History, User, Upload, FileSpreadsheet, X } from "lucide-react";
 import { TableSchema, AuditLog } from "../types";
 import { normalizeImportedTableJson } from "../lib/normalization";
 
@@ -9,6 +9,7 @@ interface SidebarProps {
   onSelectTable: (id: string) => void;
   onCreateTable: (name: string, columns?: any[], rows?: any[]) => void;
   onDeleteTable: (id: string) => void;
+  onRenameTable?: (id: string, name: string) => void;
   logs: AuditLog[];
   readOnly?: boolean;
   isAdmin?: boolean;
@@ -22,6 +23,7 @@ export default function Sidebar({
   onSelectTable,
   onCreateTable,
   onDeleteTable,
+  onRenameTable,
   logs = [],
   readOnly = false,
   isAdmin = false,
@@ -35,6 +37,8 @@ export default function Sidebar({
   const [parsedRows, setParsedRows] = useState<any[] | undefined>(undefined);
   const [importSuccessMessage, setImportSuccessMessage] = useState("");
   const [deletingTableId, setDeletingTableId] = useState<string | null>(null);
+  const [editingTableId, setEditingTableId] = useState<string | null>(null);
+  const [editingTableName, setEditingTableName] = useState("");
 
   // Estados para filtro e historial completo del Audit Trail
   const [sidebarTabFilter, setSidebarTabFilter] = useState("all");
@@ -370,59 +374,126 @@ export default function Sidebar({
                   <div
                     key={table.id}
                     id={`table-row-${table.id}`}
-                    onClick={() => onSelectTable(table.id)}
+                    onClick={() => {
+                      if (editingTableId !== table.id) {
+                        onSelectTable(table.id);
+                      }
+                    }}
                     className={`group w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-left cursor-pointer transition-all ${
                       isActive
                         ? "bg-indigo-600/10 border-indigo-500/20 text-indigo-400 shadow-sm"
                         : "bg-transparent border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40"
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="font-mono text-[9px] opacity-60 bg-zinc-900 px-1 py-0.5 rounded border border-zinc-800/80">SELECT</span>
-                      <span className="font-sans text-xs font-semibold truncate" title={table.name}>
-                        {table.name}
-                      </span>
-                    </div>
+                    {editingTableId === table.id ? (
+                      <div className="flex items-center gap-1.5 w-full" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          id={`input-rename-table-${table.id}`}
+                          type="text"
+                          value={editingTableName}
+                          onChange={(e) => setEditingTableName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              if (editingTableName.trim() && onRenameTable) {
+                                onRenameTable(table.id, editingTableName.trim());
+                              }
+                              setEditingTableId(null);
+                            } else if (e.key === "Escape") {
+                              setEditingTableId(null);
+                            }
+                          }}
+                          className="bg-zinc-950 border border-indigo-500 rounded px-2 py-1 text-xs text-white w-full outline-none"
+                          autoFocus
+                        />
+                        <button
+                          id={`btn-save-rename-${table.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (editingTableName.trim() && onRenameTable) {
+                              onRenameTable(table.id, editingTableName.trim());
+                            }
+                            setEditingTableId(null);
+                          }}
+                          className="p-1 px-1.5 bg-indigo-600 hover:bg-indigo-505 rounded text-emerald-400 cursor-pointer flex items-center justify-center shrink-0"
+                          title="Guardar nombre"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          id={`btn-cancel-rename-${table.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingTableId(null);
+                          }}
+                          className="p-1 px-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 cursor-pointer flex items-center justify-center shrink-0"
+                          title="Cancelar"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="font-mono text-[9px] opacity-60 bg-zinc-900 px-1 py-0.5 rounded border border-zinc-800/80">SELECT</span>
+                          <span className="font-sans text-xs font-semibold truncate" title={table.name}>
+                            {table.name}
+                          </span>
+                        </div>
 
-                    <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                      <span className="font-mono text-[9px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded" title="Cantidad de filas">
-                        {table.rows?.length || 0}r
-                      </span>
-                      {!readOnly && isAdmin && (
-                        <div className="flex items-center">
-                          {deletingTableId === table.id ? (
-                            <button
-                              id={`btn-delete-table-confirm-${table.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteTable(table.id);
-                                setDeletingTableId(null);
-                              }}
-                              className="px-1.5 py-0.5 bg-rose-600 hover:bg-rose-505 text-white text-[10px] font-bold rounded cursor-pointer shrink-0 animate-pulse"
-                              title="Click para Confirmar Eliminación"
-                            >
-                              ¿Borrar?
-                            </button>
-                          ) : (
-                            <button
-                              id={`btn-delete-table-${table.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeletingTableId(table.id);
-                                // Auto cancel in 3 seconds
-                                setTimeout(() => {
-                                  setDeletingTableId(p => p === table.id ? null : p);
-                                }, 3000);
-                              }}
-                              className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer transition-colors"
-                              title="Borrar Tabla"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                        <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                          <span className="font-mono text-[9px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded" title="Cantidad de filas">
+                            {table.rows?.length || 0}r
+                          </span>
+                          {!readOnly && isAdmin && (
+                            <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                id={`btn-rename-table-${table.id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingTableId(table.id);
+                                  setEditingTableName(table.name);
+                                }}
+                                className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 cursor-pointer transition-colors"
+                                title="Renombrar Tabla"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              {deletingTableId === table.id ? (
+                                <button
+                                  id={`btn-delete-table-confirm-${table.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteTable(table.id);
+                                    setDeletingTableId(null);
+                                  }}
+                                  className="px-1.5 py-0.5 bg-rose-600 hover:bg-rose-505 text-white text-[10px] font-bold rounded cursor-pointer shrink-0 animate-pulse"
+                                  title="Click para Confirmar Eliminación"
+                                >
+                                  ¿Borrar?
+                                </button>
+                              ) : (
+                                <button
+                                  id={`btn-delete-table-${table.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeletingTableId(table.id);
+                                    // Auto cancel in 3 seconds
+                                    setTimeout(() => {
+                                      setDeletingTableId(p => p === table.id ? null : p);
+                                    }, 3000);
+                                  }}
+                                  className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 cursor-pointer transition-colors"
+                                  title="Borrar Tabla"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
+                      </>
+                    )}
                   </div>
                 );
               })}

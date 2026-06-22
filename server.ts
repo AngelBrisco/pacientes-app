@@ -945,6 +945,64 @@ async function startServer() {
     }
   });
 
+  // 1b. OBTENER FILA INDIVIDUAL (GET por ID o Key)
+  app.get("/api/v1/db/data/v1/:projectName/:tableName/:rowId", async (req, res) => {
+    try {
+      const db = await loadDb();
+      const { tableName, rowId } = req.params;
+      const cleanSearchName = tableName.trim().toLowerCase();
+
+      const table = db.tables.find(t => 
+        t.id.toLowerCase() === cleanSearchName ||
+        t.name.toLowerCase() === cleanSearchName ||
+        getPhysicalTableName(t).toLowerCase() === cleanSearchName ||
+        sanitizePhysicalName(t.name) === cleanSearchName
+      );
+
+      if (!table) {
+        return res.status(404).json({ error: `La tabla con el identificador o nombre '${tableName}' no existe.` });
+      }
+
+      let existingRow = table.rows.find(r => r.id === rowId);
+      if (!existingRow) {
+        const keyCol = table.columns.find(c => 
+          c.name.toLowerCase() === "key" || 
+          c.id.toLowerCase() === "key" || 
+          sanitizePhysicalName(c.name) === "key"
+        );
+        if (keyCol) {
+          existingRow = table.rows.find(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
+        }
+      }
+
+      if (!existingRow) {
+        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no se encuentra en esta tabla.` });
+      }
+
+      const viewMode = (req.query.view || "human").toString().toLowerCase();
+      const mappedRow: any = { id: existingRow.id };
+      table.columns.forEach(col => {
+        const val = existingRow[col.id];
+        if (viewMode === "api") {
+          mappedRow[sanitizePhysicalName(col.name)] = val;
+        } else if (viewMode === "id") {
+          mappedRow[col.id] = val;
+        } else if (viewMode === "all") {
+          mappedRow[col.id] = val;
+          mappedRow[col.name] = val;
+          mappedRow[sanitizePhysicalName(col.name)] = val;
+        } else {
+          mappedRow[col.name] = val;
+        }
+      });
+
+      res.json(mappedRow);
+    } catch (apiErr: any) {
+      console.error("[n8n API GET INDIVIDUAL] Error recuperando fila:", apiErr);
+      res.status(500).json({ error: apiErr.message });
+    }
+  });
+
   // 2. INSERTAR NUEVA(S) FILA(S) (POST)
   app.post("/api/v1/db/data/v1/:projectName/:tableName", async (req, res) => {
     try {
@@ -1054,9 +1112,20 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
       }
 
-      const existingRow = table.rows.find(r => r.id === rowId);
+      let existingRow = table.rows.find(r => r.id === rowId);
       if (!existingRow) {
-        return res.status(404).json({ error: `La fila con ID '${rowId}' no se encuentra en esta tabla.` });
+        const keyCol = table.columns.find(c => 
+          c.name.toLowerCase() === "key" || 
+          c.id.toLowerCase() === "key" || 
+          sanitizePhysicalName(c.name) === "key"
+        );
+        if (keyCol) {
+          existingRow = table.rows.find(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
+        }
+      }
+
+      if (!existingRow) {
+        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no se encuentra en esta tabla.` });
       }
 
       const inputRow = req.body || {};
@@ -1136,9 +1205,20 @@ async function startServer() {
         return res.status(404).json({ error: `La tabla '${tableName}' no existe.` });
       }
 
-      const rIdx = table.rows.findIndex(r => r.id === rowId);
+      let rIdx = table.rows.findIndex(r => r.id === rowId);
       if (rIdx === -1) {
-        return res.status(404).json({ error: `La fila con ID '${rowId}' no existe en esta tabla.` });
+        const keyCol = table.columns.find(c => 
+          c.name.toLowerCase() === "key" || 
+          c.id.toLowerCase() === "key" || 
+          sanitizePhysicalName(c.name) === "key"
+        );
+        if (keyCol) {
+          rIdx = table.rows.findIndex(r => r[keyCol.id] !== undefined && String(r[keyCol.id]).trim().toLowerCase() === rowId.trim().toLowerCase());
+        }
+      }
+
+      if (rIdx === -1) {
+        return res.status(404).json({ error: `La fila con ID o Key '${rowId}' no existe en esta tabla.` });
       }
 
       table.rows.splice(rIdx, 1);
@@ -1941,6 +2021,47 @@ async function startServer() {
       tableId: tableId,
       tableName: deletedTable.name,
       details: `Se eliminó la tabla completa '${deletedTable.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Renombrar una tabla (solo administradores)
+  app.put("/api/db/tables/:tableId", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede renombrar tablas." });
+    }
+
+    const { tableId } = req.params;
+    const { name } = req.body;
+
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ error: "El nuevo nombre de la tabla es obligatorio." });
+    }
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    const oldName = table.name;
+    table.name = name.trim();
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Se renombró la tabla de '${oldName}' a '${table.name}'.`
     });
 
     await saveDb(db);
