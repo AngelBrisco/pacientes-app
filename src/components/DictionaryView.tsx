@@ -35,12 +35,18 @@ export default function DictionaryView({
   const [newOptionText, setNewOptionText] = useState<string>("");
 
   // New Correlation State
-  const [sourceTableId, setSourceTableId] = useState<string>(table.id);
+  const [sourceTableId, setSourceTableId] = useState<string>(table?.id || "");
   const [sourceColumnId, setSourceColumnId] = useState<string>("");
   const [targetTableId, setTargetTableId] = useState<string>("");
   const [targetColumnId, setTargetColumnId] = useState<string>("");
   const [isSubmittingCorr, setIsSubmittingCorr] = useState(false);
   const [syncingCorrId, setSyncingCorrId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (table?.id) {
+      setSourceTableId(table.id);
+    }
+  }, [table?.id]);
 
   const handleStartEdit = (col: Column) => {
     setEditingColId(col.id);
