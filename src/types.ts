@@ -60,10 +60,20 @@ export interface ScheduledSnapshot {
   creator: string;
 }
 
+export interface TableCorrelation {
+  id: string;
+  sourceTableId: string;
+  sourceColumnId: string;
+  targetTableId: string;
+  targetColumnId: string;
+  active: boolean;
+}
+
 export interface DbState {
   tables: TableSchema[];
   logs: AuditLog[];
   users?: UserAccount[];
   snapshots?: Snapshot[];
   scheduledSnapshots?: ScheduledSnapshot[];
+  correlations?: TableCorrelation[];
 }

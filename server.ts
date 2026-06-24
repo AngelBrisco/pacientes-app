@@ -361,6 +361,7 @@ async function restoreDbStateFromPostgres(): Promise<DbState | null> {
     const logs = await getMetadataValue("logs", []);
     const snapshots = await getMetadataValue("snapshots", []);
     const scheduledSnapshots = await getMetadataValue("scheduledSnapshots", []);
+    const correlations = await getMetadataValue("correlations", []);
 
     const tables: TableSchema[] = [];
 
@@ -406,7 +407,8 @@ async function restoreDbStateFromPostgres(): Promise<DbState | null> {
       logs,
       users,
       snapshots,
-      scheduledSnapshots
+      scheduledSnapshots,
+      correlations
     };
 
     console.log(`[Postgres Recovery] Éxito: Base de datos recuperada desde Postgres con ${tables.length} tablas y ${snapshots.length} snapshots.`);
@@ -486,6 +488,9 @@ async function loadDb(): Promise<DbState> {
       if (!parsed.scheduledSnapshots) {
         parsed.scheduledSnapshots = [];
       }
+      if (!parsed.correlations) {
+        parsed.correlations = [];
+      }
       
       // trigger background sync so postgres is populated on load if it is empty
       if (isPostgresEnabled()) {
@@ -536,6 +541,7 @@ async function triggerBackgroundPostgresSync(state: DbState) {
     await setMetadataValue("users", state.users || []);
     await setMetadataValue("logs", state.logs || []);
     await setMetadataValue("snapshots", state.snapshots || []);
+    await setMetadataValue("correlations", state.correlations || []);
     
     await syncPhysicalSchemaWithMetadata(state.tables);
     
@@ -683,6 +689,88 @@ async function startServer() {
       return { allowed: false, user, error: "Permiso Denegado: Se requieren privilegios de Administrador para gestionar usuarios." };
     }
     return { allowed: true, user };
+  }
+
+  function isFieldEmpty(val: any, type?: string) {
+    if (val === undefined || val === null) return true;
+    if (typeof val === "string" && val.trim() === "") return true;
+    if (Array.isArray(val) && val.length === 0) return true;
+    if (type === "number" && Number(val) === 0) return true;
+    if (val === 0) return true;
+    return false;
+  }
+
+  function runSyncForTable(db: DbState, updatedTableId: string, updatedRow: any, visitedRowIds: Set<string> = new Set()) {
+    const rowKey = `${updatedTableId}:${updatedRow.id}`;
+    if (visitedRowIds.has(rowKey)) return;
+    visitedRowIds.add(rowKey);
+
+    const correlations = db.correlations || [];
+    const updatedTable = db.tables.find(t => t.id === updatedTableId);
+    if (!updatedTable) return;
+
+    for (const corr of correlations) {
+      if (!corr.active) continue;
+
+      const isSource = corr.sourceTableId === updatedTableId;
+      const isTarget = corr.targetTableId === updatedTableId;
+
+      if (!isSource && !isTarget) continue;
+
+      const partnerTableId = isSource ? corr.targetTableId : corr.sourceTableId;
+      const myKeyColId = isSource ? corr.sourceColumnId : corr.targetColumnId;
+      const partnerKeyColId = isSource ? corr.targetColumnId : corr.sourceColumnId;
+
+      const partnerTable = db.tables.find(t => t.id === partnerTableId);
+      if (!partnerTable) continue;
+
+      const myKeyValue = updatedRow[myKeyColId];
+      if (myKeyValue === undefined || myKeyValue === null || String(myKeyValue).trim() === "") continue;
+
+      const cleanMyKeyValue = String(myKeyValue).trim().toLowerCase();
+
+      const partnerRows = partnerTable.rows.filter(r => {
+        const val = r[partnerKeyColId];
+        return val !== undefined && val !== null && String(val).trim().toLowerCase() === cleanMyKeyValue;
+      });
+
+      for (const partnerRow of partnerRows) {
+        let rowChanged = false;
+        let partnerChanged = false;
+
+        for (const colMy of updatedTable.columns) {
+          if (colMy.id === myKeyColId) continue;
+
+          const colPartner = partnerTable.columns.find(c => 
+            c.id !== partnerKeyColId && 
+            c.name.trim().toLowerCase() === colMy.name.trim().toLowerCase()
+          );
+
+          if (!colPartner) continue;
+
+          const valMy = updatedRow[colMy.id];
+          const valPartner = partnerRow[colPartner.id];
+
+          const isMyEmpty = isFieldEmpty(valMy, colMy.type);
+          const isPartnerEmpty = isFieldEmpty(valPartner, colPartner.type);
+
+          if (!isMyEmpty && isPartnerEmpty) {
+            partnerRow[colPartner.id] = valMy;
+            partnerChanged = true;
+          } else if (isMyEmpty && !isPartnerEmpty) {
+            updatedRow[colMy.id] = valPartner;
+            rowChanged = true;
+          } else if (!isMyEmpty && !isPartnerEmpty && valMy !== valPartner) {
+            partnerRow[colPartner.id] = valMy;
+            partnerChanged = true;
+          }
+        }
+
+        if (partnerChanged) {
+          runSyncForTable(db, partnerTableId, partnerRow, visitedRowIds);
+        }
+      }
+    }
   }
 
   function verifyTableAccess(req: express.Request, db: DbState, tableId: string): boolean {
@@ -1108,6 +1196,10 @@ async function startServer() {
         details: `Se insertó(aron) ${newlyCreatedRows.length} fila(s) mediante el API REST de n8n.`
       });
 
+      for (const row of newlyCreatedRows) {
+        runSyncForTable(db, table.id, row);
+      }
+
       await saveDb(db);
 
       // Formatear respuesta con los campos extendidos duales
@@ -1194,6 +1286,8 @@ async function startServer() {
         tableName: table.name,
         details: `Se actualizó el registro ID '${rowId}' mediante el API REST de n8n.`
       });
+
+      runSyncForTable(db, table.id, existingRow);
 
       await saveDb(db);
 
@@ -1784,6 +1878,165 @@ async function startServer() {
     res.json(db);
   });
 
+  // ==========================================
+  // API para Correlaciones de Tablas Sincronizadas
+  // ==========================================
+
+  // Listar correlaciones
+  app.get("/api/db/correlations", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+    res.json(db.correlations || []);
+  });
+
+  // Crear correlación
+  app.post("/api/db/correlations", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { sourceTableId, sourceColumnId, targetTableId, targetColumnId } = req.body;
+    if (!sourceTableId || !sourceColumnId || !targetTableId || !targetColumnId) {
+      return res.status(400).json({ error: "Todos los campos de la relación son requeridos." });
+    }
+
+    const newCorr = {
+      id: "corr_" + Date.now(),
+      sourceTableId,
+      sourceColumnId,
+      targetTableId,
+      targetColumnId,
+      active: true
+    };
+
+    if (!db.correlations) db.correlations = [];
+    db.correlations.push(newCorr);
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se configuró una correlación inteligente entre las tablas '${sourceTableId}' y '${targetTableId}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Alternar/Actualizar estado de una correlación
+  app.put("/api/db/correlations/:id", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { id } = req.params;
+    const { active } = req.body;
+
+    if (!db.correlations) db.correlations = [];
+    const corr = db.correlations.find(c => c.id === id);
+    if (!corr) {
+      return res.status(404).json({ error: "Correlación no encontrada." });
+    }
+
+    if (active !== undefined) corr.active = active;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se ${active ? "activó" : "desactivó"} la correlación inteligente '${id}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Eliminar correlación
+  app.delete("/api/db/correlations/:id", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { id } = req.params;
+    if (!db.correlations) db.correlations = [];
+    const idx = db.correlations.findIndex(c => c.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: "Correlación no encontrada." });
+    }
+
+    const deleted = db.correlations.splice(idx, 1)[0];
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se eliminó la correlación inteligente entre las tablas '${deleted.sourceTableId}' y '${deleted.targetTableId}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Forzar sincronización masiva retrospectiva de correlación
+  app.post("/api/db/correlations/:id/sync", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error });
+    }
+
+    const { id } = req.params;
+    if (!db.correlations) db.correlations = [];
+    const corr = db.correlations.find(c => c.id === id);
+    if (!corr) {
+      return res.status(404).json({ error: "Correlación no encontrada." });
+    }
+
+    const sourceTable = db.tables.find(t => t.id === corr.sourceTableId);
+    if (!sourceTable) {
+      return res.status(400).json({ error: "La tabla origen de la correlación ya no existe." });
+    }
+
+    let totalSync = 0;
+    const visited = new Set<string>();
+    
+    for (const r of sourceTable.rows) {
+      runSyncForTable(db, corr.sourceTableId, r, visited);
+      totalSync++;
+    }
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: "*",
+      tableName: "Base de Datos",
+      details: `Se ejecutó sincronización masiva retrospectiva para la correlación inteligente '${id}'. Sincronizados ${totalSync} registros.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
   // Crear una nueva tabla
   app.post("/api/db/tables", async (req, res) => {
     const db = await loadDb();
@@ -2359,6 +2612,11 @@ async function startServer() {
       details: `Importación CSV exitosa: Cargó ${importedCount} registros de pacientes en '${table.name}'.`
     });
 
+    const newlyCreatedRows = table.rows.slice(-importedCount);
+    for (const row of newlyCreatedRows) {
+      runSyncForTable(db, tableId, row);
+    }
+
     await saveDb(db);
     res.json(db);
   });
@@ -2414,6 +2672,8 @@ async function startServer() {
       tableName: table.name,
       details: `Creó una nueva fila en '${table.name}' (${titleVal ? `Identificación: '${titleVal}'` : `ID: ${rowId}`}).`
     });
+
+    runSyncForTable(db, tableId, cleanRow);
 
     await saveDb(db);
     res.json(db);
@@ -2473,6 +2733,7 @@ async function startServer() {
         tableName: table.name,
         details: `Modificó fila en '${table.name}' (${titleVal ? `Identificación: '${titleVal}'` : `ID: ${rowId}`}). Detalle: ${changes.join(", ")}.`
       });
+      runSyncForTable(db, tableId, row);
       await saveDb(db);
     }
 

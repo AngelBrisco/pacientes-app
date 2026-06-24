@@ -565,6 +565,9 @@ export default function App() {
                   table={activeTable} 
                   onEditColumn={handleEditColumn} 
                   onSetPrimaryColumn={handleSetPrimaryColumn}
+                  allTables={dbState?.tables || []}
+                  correlations={dbState?.correlations || []}
+                  apiAction={apiAction}
                 />
               )}
 
