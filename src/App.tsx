@@ -253,10 +253,10 @@ export default function App() {
     await apiAction(`/api/db/tables/${activeTableId}/bulk-rows`, "POST", rowsData);
   };
 
-  // REORDER ROWS
-  const handleReorderRows = async (rowIds: string[]) => {
+  // REORDER COLUMNS
+  const handleReorderColumns = async (columnIds: string[]) => {
     if (!activeTableId) return;
-    await apiAction(`/api/db/tables/${activeTableId}/reorder-rows`, "PUT", { rowIds });
+    await apiAction(`/api/db/tables/${activeTableId}/reorder-columns`, "PUT", { columnIds });
   };
 
   // SAVE KANBAN COLUMN PREFERENCE
@@ -561,7 +561,7 @@ export default function App() {
                   onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}
                   isAdmin={currentUser.role === "admin"}
-                  onReorderRows={handleReorderRows}
+                  onReorderColumns={handleReorderColumns}
                 />
               )}
 

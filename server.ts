@@ -2821,19 +2821,19 @@ async function startServer() {
     res.json(db);
   });
 
-  // Reordenar las filas de una tabla
-  app.put("/api/db/tables/:tableId/reorder-rows", async (req, res) => {
+  // Reordenar las columnas de una tabla
+  app.put("/api/db/tables/:tableId/reorder-columns", async (req, res) => {
     const db = await loadDb();
     const auth = verifyWriteAccess(req, db);
     if (!auth.allowed) {
-      return res.status(403).json({ error: auth.error || "Permiso Denegado: No tienes permisos para reordenar filas." });
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: No tienes permisos para reordenar columnas." });
     }
 
     const { tableId } = req.params;
-    const { rowIds } = req.body;
+    const { columnIds } = req.body;
 
-    if (!Array.isArray(rowIds)) {
-      return res.status(400).json({ error: "Se requiere un array de IDs de filas ('rowIds')." });
+    if (!Array.isArray(columnIds)) {
+      return res.status(400).json({ error: "Se requiere un array de IDs de columnas ('columnIds')." });
     }
 
     if (!verifyTableAccess(req, db, tableId)) {
@@ -2845,31 +2845,31 @@ async function startServer() {
       return res.status(404).json({ error: "Tabla no encontrada." });
     }
 
-    // Reordenar las filas de forma segura
-    const rowMap = new Map(table.rows.map(r => [r.id, r]));
-    const newRows: any[] = [];
+    // Reordenar las columnas de forma segura
+    const colMap = new Map(table.columns.map(c => [c.id, c]));
+    const newColumns: any[] = [];
 
-    for (const id of rowIds) {
-      const r = rowMap.get(id);
-      if (r) {
-        newRows.push(r);
-        rowMap.delete(id);
+    for (const id of columnIds) {
+      const col = colMap.get(id);
+      if (col) {
+        newColumns.push(col);
+        colMap.delete(id);
       }
     }
-    for (const [_, r] of rowMap.entries()) {
-      newRows.push(r);
+    for (const [_, col] of colMap.entries()) {
+      newColumns.push(col);
     }
 
-    table.rows = newRows;
+    table.columns = newColumns;
 
     db.logs.push({
       id: "log_" + Date.now(),
       timestamp: new Date().toISOString(),
       user: auth.user.name,
-      action: "UPDATE",
+      action: "SCHEMA_CHANGE",
       tableId: tableId,
       tableName: table.name,
-      details: `Reordenó el orden físico de las filas en la tabla '${table.name}'.`
+      details: `Reordenó el orden de las columnas en la tabla '${table.name}'.`
     });
 
     await saveDb(db);

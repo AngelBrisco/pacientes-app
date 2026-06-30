@@ -34,7 +34,7 @@ interface TableViewProps {
   onDeleteRow: (rowId: string) => void;
   readOnly?: boolean;
   isAdmin?: boolean;
-  onReorderRows?: (rowIds: string[]) => Promise<void>;
+  onReorderColumns?: (columnIds: string[]) => Promise<void>;
 }
 
 export default function TableView({
@@ -48,7 +48,7 @@ export default function TableView({
   onDeleteRow,
   readOnly = false,
   isAdmin = false,
-  onReorderRows,
+  onReorderColumns,
 }: TableViewProps) {
   // Search and Sort states
   const [searchTerm, setSearchTerm] = useState("");
@@ -118,48 +118,35 @@ export default function TableView({
     }
   };
 
-  const handleMoveRow = async (currentIndex: number, direction: "up" | "down") => {
+  const handleMoveColumn = async (currentIndex: number, direction: "left" | "right") => {
     if (readOnly) return;
     
-    // We want to reorder in reference to table.rows (physical order)
-    const currentRows = [...(table.rows || [])];
-    const currentRowObj = sortedRows[currentIndex];
-    const physicalIdx = currentRows.findIndex(r => r.id === currentRowObj.id);
+    const currentCols = [...(table.columns || [])];
+    if (currentIndex === -1 || currentIndex >= currentCols.length) return;
     
-    if (physicalIdx === -1) return;
-    
-    let targetPhysicalIdx = physicalIdx;
-    if (direction === "up") {
+    let targetIdx = currentIndex;
+    if (direction === "left") {
       if (currentIndex > 0) {
-        const prevRowObj = sortedRows[currentIndex - 1];
-        targetPhysicalIdx = currentRows.findIndex(r => r.id === prevRowObj.id);
+        targetIdx = currentIndex - 1;
       } else {
         return;
       }
     } else {
-      if (currentIndex < sortedRows.length - 1) {
-        const nextRowObj = sortedRows[currentIndex + 1];
-        targetPhysicalIdx = currentRows.findIndex(r => r.id === nextRowObj.id);
+      if (currentIndex < currentCols.length - 1) {
+        targetIdx = currentIndex + 1;
       } else {
         return;
       }
     }
     
-    if (targetPhysicalIdx === -1 || targetPhysicalIdx === physicalIdx) return;
+    // Swap columns
+    const temp = currentCols[currentIndex];
+    currentCols[currentIndex] = currentCols[targetIdx];
+    currentCols[targetIdx] = temp;
     
-    // Swap elements at physicalIdx and targetPhysicalIdx
-    const temp = currentRows[physicalIdx];
-    currentRows[physicalIdx] = currentRows[targetPhysicalIdx];
-    currentRows[targetPhysicalIdx] = temp;
-    
-    // Clear active sort to make manual reordering fully visible
-    if (sortColumnId) {
-      setSortColumnId(null);
-    }
-    
-    if (onReorderRows) {
-      const rowIds = currentRows.map(r => r.id);
-      await onReorderRows(rowIds);
+    if (onReorderColumns) {
+      const colIds = currentCols.map(c => c.id);
+      await onReorderColumns(colIds);
     }
   };
 
@@ -840,21 +827,47 @@ export default function TableView({
                         </span>
                       </div>
                       
-                      {/* Only allow deleting column if it is not the very first column (for index safety) */}
-                      {index > 0 && !readOnly && isAdmin && (
-                        <button
-                          id={`btn-col-del-${col.id}`}
-                          onClick={() => {
-                            if (confirm(`¿Proceder a ejecutar DROP COLUMN en la columna '${col.name}'? Esto destruirá de forma irreversible todos los datos almacenados en este campo.`)) {
-                              onDeleteColumn(col.id);
-                            }
-                          }}
-                          className="opacity-0 group-hover/header:opacity-100 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 rounded cursor-pointer transition-all"
-                          title="DROP COLUMN (Borrar columna)"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {/* Left/Right Column movement controls */}
+                        {!readOnly && (
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => handleMoveColumn(index, "left")}
+                              disabled={index === 0}
+                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                              type="button"
+                              title="Mover columna a la izquierda"
+                            >
+                              ◀
+                            </button>
+                            <button
+                              onClick={() => handleMoveColumn(index, "right")}
+                              disabled={index === table.columns.length - 1}
+                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                              type="button"
+                              title="Mover columna a la derecha"
+                            >
+                              ▶
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Only allow deleting column if it is not the very first column (for index safety) */}
+                        {index > 0 && !readOnly && isAdmin && (
+                          <button
+                            id={`btn-col-del-${col.id}`}
+                            onClick={() => {
+                              if (confirm(`¿Proceder a ejecutar DROP COLUMN en la columna '${col.name}'? Esto destruirá de forma irreversible todos los datos almacenados en este campo.`)) {
+                                onDeleteColumn(col.id);
+                              }
+                            }}
+                            className="opacity-0 group-hover/header:opacity-100 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 rounded cursor-pointer transition-all"
+                            title="DROP COLUMN (Borrar columna)"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </th>
                 ))}
@@ -875,30 +888,8 @@ export default function TableView({
                 sortedRows.map((row, idx) => (
                   <tr key={row.id} className="hover:bg-zinc-900/35 transition-colors group/row" id={`row-tr-${row.id}`}>
                     {/* Index */}
-                    <td className="px-3 py-3 text-center font-mono border-r border-zinc-800 text-zinc-500 font-bold bg-zinc-950/20">
-                      <div className="flex flex-col sm:flex-row items-center justify-center gap-1.5">
-                        <span className="min-w-[16px]">{idx + 1}</span>
-                        {!readOnly && (
-                          <div className="flex sm:flex-col items-center gap-0.5 opacity-0 group-hover/row:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleMoveRow(idx, "up")}
-                              disabled={idx === 0}
-                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
-                              title="Mover fila hacia arriba"
-                            >
-                              ▲
-                            </button>
-                            <button
-                              onClick={() => handleMoveRow(idx, "down")}
-                              disabled={idx === sortedRows.length - 1}
-                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
-                              title="Mover fila hacia abajo"
-                            >
-                              ▼
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                    <td className="px-4 py-3 text-center font-mono border-r border-zinc-800 text-zinc-500 font-bold bg-zinc-950/20">
+                      {idx + 1}
                     </td>
 
                     {/* Columns values */}
