@@ -6,9 +6,10 @@ interface KanbanViewProps {
   table: TableSchema;
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   readOnly?: boolean;
+  isAdmin?: boolean;
 }
 
-export default function KanbanView({ table, onUpdateRow, readOnly = false }: KanbanViewProps) {
+export default function KanbanView({ table, onUpdateRow, readOnly = false, isAdmin = false }: KanbanViewProps) {
   // Find selectable grouping columns (Columns of type 'select' or 'boolean')
   const groupableColumns = table.columns.filter(
     (col) => col.type === "select" || col.type === "boolean"
@@ -97,18 +98,27 @@ export default function KanbanView({ table, onUpdateRow, readOnly = false }: Kan
       <div className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4 shadow-sm" id="kanban-group-toolbar">
         <SlidersHorizontal className="w-4 h-4 text-emerald-400 shrink-0" />
         <span className="font-mono text-xs uppercase tracking-wider text-zinc-400 font-bold">Agrupar por columna:</span>
-        <select
-          value={groupingColumnId}
-          onChange={(e) => setGroupingColumnId(e.target.value)}
-          className="bg-zinc-950 border border-zinc-800 rounded-lg text-xs px-3 py-1.5 text-zinc-100 outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-          id="kanban-grouping-select"
-        >
-          {groupableColumns.map((col) => (
-            <option key={col.id} value={col.id}>
-              {col.name} ({col.type === "select" ? "ENUM" : "BOOLEAN"})
-            </option>
-          ))}
-        </select>
+        {isAdmin ? (
+          <select
+            value={groupingColumnId}
+            onChange={(e) => setGroupingColumnId(e.target.value)}
+            className="bg-zinc-950 border border-zinc-800 rounded-lg text-xs px-3 py-1.5 text-zinc-100 outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+            id="kanban-grouping-select"
+          >
+            {groupableColumns.map((col) => (
+              <option key={col.id} value={col.id}>
+                {col.name} ({col.type === "select" ? "ENUM" : "BOOLEAN"})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="bg-zinc-950 border border-zinc-800 rounded-lg text-xs px-3 py-1.5 text-zinc-300 font-medium font-mono">
+              {activeColumn?.name} ({activeColumn?.type === "select" ? "ENUM" : "BOOLEAN"})
+            </span>
+            <span className="text-[10px] text-zinc-500 font-sans italic">(Solo Administradores pueden cambiar la agrupación)</span>
+          </div>
+        )}
       </div>
 
       {/* Board Columns container */}

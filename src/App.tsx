@@ -475,7 +475,7 @@ export default function App() {
           {currentUser.permissions === "read-only" && activeView !== "users" && (
             <div className="mb-4 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 flex gap-2.5 items-center text-amber-500 text-xs font-sans max-w-4xl mx-auto block" id="readonly-warning-banner">
               <Eye className="w-4 h-4 text-amber-500" />
-              <span><strong>Sesión Consulta (Solo Lectura):</strong> Tienes permisos restringidos de Base de Datos. Puedes explorar tablas, Kanban y Diccionarios DDL pero tu rol no está auditado para ejecutar cambios WRITE u operaciones DML (INSERT, UPDATE, DELETE).</span>
+              <span><strong>Sesión Consulta (Solo Lectura):</strong> Tienes permisos restringidos de Base de Datos. Puedes explorar tablas, Kanban y Calendario.</span>
             </div>
           )}
 
@@ -557,6 +557,7 @@ export default function App() {
                   table={activeTable}
                   onUpdateRow={handleUpdateRow}
                   readOnly={currentUser.permissions === "read-only"}
+                  isAdmin={currentUser.role === "admin"}
                 />
               )}
 
