@@ -2785,6 +2785,97 @@ async function startServer() {
     res.json(db);
   });
 
+  // Actualizar la columna de agrupación de Kanban de una tabla (solo administradores)
+  app.put("/api/db/tables/:tableId/kanban-column", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyAdminAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: Solo el Administrador puede definir el campo del Kanban." });
+    }
+
+    const { tableId } = req.params;
+    const { kanbanColumnId } = req.body;
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    table.kanbanColumnId = kanbanColumnId;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "SCHEMA_CHANGE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Se configuró la columna Kanban predeterminada de '${table.name}' a '${kanbanColumnId || "Ninguna"}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
+  // Reordenar las filas de una tabla
+  app.put("/api/db/tables/:tableId/reorder-rows", async (req, res) => {
+    const db = await loadDb();
+    const auth = verifyWriteAccess(req, db);
+    if (!auth.allowed) {
+      return res.status(403).json({ error: auth.error || "Permiso Denegado: No tienes permisos para reordenar filas." });
+    }
+
+    const { tableId } = req.params;
+    const { rowIds } = req.body;
+
+    if (!Array.isArray(rowIds)) {
+      return res.status(400).json({ error: "Se requiere un array de IDs de filas ('rowIds')." });
+    }
+
+    if (!verifyTableAccess(req, db, tableId)) {
+      return res.status(403).json({ error: "Permiso Denegado: No tienes acceso a esta tabla." });
+    }
+
+    const table = db.tables.find(t => t.id === tableId);
+    if (!table) {
+      return res.status(404).json({ error: "Tabla no encontrada." });
+    }
+
+    // Reordenar las filas de forma segura
+    const rowMap = new Map(table.rows.map(r => [r.id, r]));
+    const newRows: any[] = [];
+
+    for (const id of rowIds) {
+      const r = rowMap.get(id);
+      if (r) {
+        newRows.push(r);
+        rowMap.delete(id);
+      }
+    }
+    for (const [_, r] of rowMap.entries()) {
+      newRows.push(r);
+    }
+
+    table.rows = newRows;
+
+    db.logs.push({
+      id: "log_" + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: auth.user.name,
+      action: "UPDATE",
+      tableId: tableId,
+      tableName: table.name,
+      details: `Reordenó el orden físico de las filas en la tabla '${table.name}'.`
+    });
+
+    await saveDb(db);
+    res.json(db);
+  });
+
   // API de Subida de Archivos Corporativos (Imágenes y PDFs)
   app.post("/api/upload", async (req, res) => {
     const db = await loadDb();

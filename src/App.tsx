@@ -253,6 +253,18 @@ export default function App() {
     await apiAction(`/api/db/tables/${activeTableId}/bulk-rows`, "POST", rowsData);
   };
 
+  // REORDER ROWS
+  const handleReorderRows = async (rowIds: string[]) => {
+    if (!activeTableId) return;
+    await apiAction(`/api/db/tables/${activeTableId}/reorder-rows`, "PUT", { rowIds });
+  };
+
+  // SAVE KANBAN COLUMN PREFERENCE
+  const handleSaveKanbanColumn = async (columnId: string) => {
+    if (!activeTableId) return;
+    await apiAction(`/api/db/tables/${activeTableId}/kanban-column`, "PUT", { kanbanColumnId: columnId });
+  };
+
   // RESET TO DEFAULT FACTORY PRESETS
   const handleResetDb = async () => {
     if (confirm("¿Proceder con la restauración de fábrica? Esto volverá a construir los schemas iniciales 'Tareas de Ingeniería' y 'Cartera de Clientes' sobreescibiendo cambios actuales.")) {
@@ -549,6 +561,7 @@ export default function App() {
                   onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}
                   isAdmin={currentUser.role === "admin"}
+                  onReorderRows={handleReorderRows}
                 />
               )}
 
@@ -558,6 +571,7 @@ export default function App() {
                   onUpdateRow={handleUpdateRow}
                   readOnly={currentUser.permissions === "read-only"}
                   isAdmin={currentUser.role === "admin"}
+                  onSaveKanbanColumn={handleSaveKanbanColumn}
                 />
               )}
 

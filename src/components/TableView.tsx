@@ -34,6 +34,7 @@ interface TableViewProps {
   onDeleteRow: (rowId: string) => void;
   readOnly?: boolean;
   isAdmin?: boolean;
+  onReorderRows?: (rowIds: string[]) => Promise<void>;
 }
 
 export default function TableView({
@@ -47,6 +48,7 @@ export default function TableView({
   onDeleteRow,
   readOnly = false,
   isAdmin = false,
+  onReorderRows,
 }: TableViewProps) {
   // Search and Sort states
   const [searchTerm, setSearchTerm] = useState("");
@@ -113,6 +115,51 @@ export default function TableView({
     } else {
       setSortColumnId(colId);
       setSortDirection("asc");
+    }
+  };
+
+  const handleMoveRow = async (currentIndex: number, direction: "up" | "down") => {
+    if (readOnly) return;
+    
+    // We want to reorder in reference to table.rows (physical order)
+    const currentRows = [...(table.rows || [])];
+    const currentRowObj = sortedRows[currentIndex];
+    const physicalIdx = currentRows.findIndex(r => r.id === currentRowObj.id);
+    
+    if (physicalIdx === -1) return;
+    
+    let targetPhysicalIdx = physicalIdx;
+    if (direction === "up") {
+      if (currentIndex > 0) {
+        const prevRowObj = sortedRows[currentIndex - 1];
+        targetPhysicalIdx = currentRows.findIndex(r => r.id === prevRowObj.id);
+      } else {
+        return;
+      }
+    } else {
+      if (currentIndex < sortedRows.length - 1) {
+        const nextRowObj = sortedRows[currentIndex + 1];
+        targetPhysicalIdx = currentRows.findIndex(r => r.id === nextRowObj.id);
+      } else {
+        return;
+      }
+    }
+    
+    if (targetPhysicalIdx === -1 || targetPhysicalIdx === physicalIdx) return;
+    
+    // Swap elements at physicalIdx and targetPhysicalIdx
+    const temp = currentRows[physicalIdx];
+    currentRows[physicalIdx] = currentRows[targetPhysicalIdx];
+    currentRows[targetPhysicalIdx] = temp;
+    
+    // Clear active sort to make manual reordering fully visible
+    if (sortColumnId) {
+      setSortColumnId(null);
+    }
+    
+    if (onReorderRows) {
+      const rowIds = currentRows.map(r => r.id);
+      await onReorderRows(rowIds);
     }
   };
 
@@ -828,8 +875,30 @@ export default function TableView({
                 sortedRows.map((row, idx) => (
                   <tr key={row.id} className="hover:bg-zinc-900/35 transition-colors group/row" id={`row-tr-${row.id}`}>
                     {/* Index */}
-                    <td className="px-4 py-3 text-center font-mono border-r border-zinc-800 text-zinc-500 font-bold bg-zinc-950/20">
-                      {idx + 1}
+                    <td className="px-3 py-3 text-center font-mono border-r border-zinc-800 text-zinc-500 font-bold bg-zinc-950/20">
+                      <div className="flex flex-col sm:flex-row items-center justify-center gap-1.5">
+                        <span className="min-w-[16px]">{idx + 1}</span>
+                        {!readOnly && (
+                          <div className="flex sm:flex-col items-center gap-0.5 opacity-0 group-hover/row:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => handleMoveRow(idx, "up")}
+                              disabled={idx === 0}
+                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                              title="Mover fila hacia arriba"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              onClick={() => handleMoveRow(idx, "down")}
+                              disabled={idx === sortedRows.length - 1}
+                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                              title="Mover fila hacia abajo"
+                            >
+                              ▼
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     {/* Columns values */}

@@ -18,6 +18,7 @@ export interface TableSchema {
   name: string;
   columns: Column[];
   rows: Row[];
+  kanbanColumnId?: string; // Columna de agrupación predeterminada de Kanban definida por el administrador
 }
 
 export interface AuditLog {

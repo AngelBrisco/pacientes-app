@@ -7,9 +7,16 @@ interface KanbanViewProps {
   onUpdateRow: (rowId: string, rowData: Record<string, any>) => void;
   readOnly?: boolean;
   isAdmin?: boolean;
+  onSaveKanbanColumn?: (columnId: string) => Promise<void>;
 }
 
-export default function KanbanView({ table, onUpdateRow, readOnly = false, isAdmin = false }: KanbanViewProps) {
+export default function KanbanView({ 
+  table, 
+  onUpdateRow, 
+  readOnly = false, 
+  isAdmin = false,
+  onSaveKanbanColumn
+}: KanbanViewProps) {
   // Find selectable grouping columns (Columns of type 'select' or 'boolean')
   const groupableColumns = table.columns.filter(
     (col) => col.type === "select" || col.type === "boolean"
@@ -20,15 +27,19 @@ export default function KanbanView({ table, onUpdateRow, readOnly = false, isAdm
   // Sync state with selected table or columns
   useEffect(() => {
     if (groupableColumns.length > 0) {
-      // Find default column, preferably one named 'estado', 'status', 'priority' or the first select type
-      const defaultCol = groupableColumns.find((c) =>
-        ["estado", "status", "prioridad", "priority"].includes(c.name.toLowerCase())
-      ) || groupableColumns[0];
-      setGroupingColumnId(defaultCol.id);
+      if (table.kanbanColumnId && groupableColumns.some(c => c.id === table.kanbanColumnId)) {
+        setGroupingColumnId(table.kanbanColumnId);
+      } else {
+        // Find default column, preferably one named 'estado', 'status', 'priority' or the first select type
+        const defaultCol = groupableColumns.find((c) =>
+          ["estado", "status", "prioridad", "priority"].includes(c.name.toLowerCase())
+        ) || groupableColumns[0];
+        setGroupingColumnId(defaultCol.id);
+      }
     } else {
       setGroupingColumnId("");
     }
-  }, [table.id]);
+  }, [table.id, table.kanbanColumnId]);
 
   if (groupableColumns.length === 0) {
     return (
@@ -101,7 +112,13 @@ export default function KanbanView({ table, onUpdateRow, readOnly = false, isAdm
         {isAdmin ? (
           <select
             value={groupingColumnId}
-            onChange={(e) => setGroupingColumnId(e.target.value)}
+            onChange={async (e) => {
+              const val = e.target.value;
+              setGroupingColumnId(val);
+              if (onSaveKanbanColumn) {
+                await onSaveKanbanColumn(val);
+              }
+            }}
             className="bg-zinc-950 border border-zinc-800 rounded-lg text-xs px-3 py-1.5 text-zinc-100 outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
             id="kanban-grouping-select"
           >

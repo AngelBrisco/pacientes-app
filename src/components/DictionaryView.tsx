@@ -341,25 +341,59 @@ export default function DictionaryView({
                               </label>
                               
                               {/* Present tag lists */}
-                              <div className="flex flex-wrap gap-1.5">
+                              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                                 {editOptions.length === 0 ? (
                                   <span className="text-xs italic text-zinc-500 font-sans">- No hay restricciones definidas. Añade alguna opción.</span>
                                 ) : (
-                                  editOptions.map((opt) => (
-                                    <span
+                                  editOptions.map((opt, oIdx) => (
+                                    <div
                                       key={opt}
-                                      className="flex items-center gap-1.5 text-xs text-indigo-300 bg-indigo-500/10 px-2.5 py-1 rounded-lg border border-indigo-500/20 font-sans"
+                                      className="flex items-center justify-between gap-1.5 text-xs text-indigo-300 bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-800/80 font-sans"
                                     >
-                                      {opt}
-                                      <button
-                                        onClick={() => handleRemoveOption(opt)}
-                                        className="text-zinc-500 hover:text-rose-400 cursor-pointer text-[10px]"
-                                        type="button"
-                                        title="Quitar"
-                                      >
-                                        ✕
-                                      </button>
-                                    </span>
+                                      <span className="truncate font-medium">{opt}</span>
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={() => {
+                                            if (oIdx === 0) return;
+                                            const copy = [...editOptions];
+                                            const temp = copy[oIdx];
+                                            copy[oIdx] = copy[oIdx - 1];
+                                            copy[oIdx - 1] = temp;
+                                            setEditOptions(copy);
+                                          }}
+                                          disabled={oIdx === 0}
+                                          className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 p-0.5 cursor-pointer text-[10px]"
+                                          type="button"
+                                          title="Subir opción"
+                                        >
+                                          ▲
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            if (oIdx === editOptions.length - 1) return;
+                                            const copy = [...editOptions];
+                                            const temp = copy[oIdx];
+                                            copy[oIdx] = copy[oIdx + 1];
+                                            copy[oIdx + 1] = temp;
+                                            setEditOptions(copy);
+                                          }}
+                                          disabled={oIdx === editOptions.length - 1}
+                                          className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 p-0.5 cursor-pointer text-[10px]"
+                                          type="button"
+                                          title="Bajar opción"
+                                        >
+                                          ▼
+                                        </button>
+                                        <button
+                                          onClick={() => handleRemoveOption(opt)}
+                                          className="text-zinc-500 hover:text-rose-400 cursor-pointer ml-1 p-0.5 text-[10px]"
+                                          type="button"
+                                          title="Eliminar opción"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    </div>
                                   ))
                                 )}
                               </div>
