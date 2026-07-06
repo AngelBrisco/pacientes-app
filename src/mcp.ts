@@ -458,7 +458,22 @@ export function setupMcp(
     }
   };
 
-  // 1. ENDPOINT DIRECTO HTTP POST (JSON-RPC 2.0)
+  // 1. ENDPOINT DIRECTO HTTP POST (JSON-RPC 2.0) y GET para autodetectores de transporte
+  // Permite la autodetección de transporte (Streamable HTTP) respondiendo a GET /api/mcp con application/json
+  router.get("/", (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "application/json");
+    return res.json({
+      jsonrpc: "2.0",
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {}
+        },
+        serverInfo: { name: "NocoClone MCP Server", version: "1.0.0" }
+      }
+    });
+  });
+
   // Ideal para una conexión rápida desde agentes locales u otras herramientas
   router.post("/", async (req: Request, res: Response) => {
     const { jsonrpc, id, method, params } = req.body;
