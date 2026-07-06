@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { DbState, TableSchema, AuditLog, Column, Row } from "./src/types";
 import dotenv from "dotenv";
 import pg from "pg";
+import { setupMcp } from "./src/mcp";
 
 dotenv.config();
 
@@ -2918,6 +2919,9 @@ async function startServer() {
       res.status(500).json({ error: "Error interno al guardar los adjuntos." });
     }
   });
+
+  // Inicialización del Motor Model Context Protocol (MCP) para optimizar interacción con Agentes AI
+  setupMcp(app, loadDb, saveDb);
 
   // Integración de Vite Middleware para Desarrollo
   if (process.env.NODE_ENV !== "production") {

@@ -9,6 +9,7 @@ import DictionaryView from "./components/DictionaryView";
 import CalendarView from "./components/CalendarView";
 import BackupsView from "./components/BackupsView";
 import ApiIntegrationView from "./components/ApiIntegrationView";
+import McpIntegrationView from "./components/McpIntegrationView";
 import {
   Table,
   Kanban,
@@ -27,13 +28,15 @@ import {
   Calendar,
   Archive,
   Menu,
-  X
+  X,
+  Bot,
+  Cpu
 } from "lucide-react";
 
 export default function App() {
   const [dbState, setDbState] = useState<DbState | null>(null);
   const [activeTableId, setActiveTableId] = useState<string>("");
-  const [activeView, setActiveView] = useState<"table" | "kanban" | "dictionary" | "users" | "backups" | "api">("table");
+  const [activeView, setActiveView] = useState<"table" | "kanban" | "dictionary" | "users" | "backups" | "api" | "mcp">("table");
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     try {
       return window.innerWidth > 1024;
@@ -440,6 +443,20 @@ export default function App() {
                     <Workflow className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">API REST</span>
                   </button>
+
+                  <button
+                    id="tab-view-mcp"
+                    onClick={() => setActiveView("mcp")}
+                    className={`text-xs font-semibold uppercase tracking-wider pb-1 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      activeView === "mcp"
+                        ? "text-indigo-400 border-b-2 border-indigo-500"
+                        : "text-zinc-505 hover:text-zinc-300"
+                    }`}
+                    title="Model Context Protocol (MCP) para optimizar interacción con Agentes Inteligentes"
+                  >
+                    <Bot className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">MCP (Agente)</span>
+                  </button>
                 </>
               )}
 
@@ -530,6 +547,8 @@ export default function App() {
               onToggleScheduledRuleActive={handleToggleScheduledRuleActive}
               isSyncing={isSyncing}
             />
+          ) : activeView === "mcp" ? (
+            <McpIntegrationView tables={dbState?.tables || []} />
           ) : !activeTable ? (
             <div className="h-full flex flex-col items-center justify-center max-w-md mx-auto text-center space-y-4" id="view-empty-schema-panel">
               <Server className="w-12 h-12 text-zinc-700" />
