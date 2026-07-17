@@ -92,6 +92,18 @@ const MCP_TOOLS: McpTool[] = [
       type: "object",
       properties: {}
     }
+  },
+  {
+    name: "upsert_patient",
+    description: "Inserta o actualiza de manera inteligente los datos de un paciente en una tabla basándose en su DNI, aplicando lógica de prioridad por fecha más reciente y conservando datos previos no provistos en la llamada.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tableId: { type: "string", description: "ID de la tabla donde realizar el upsert del paciente (consultorios, cirugías, hemodinamia, etc.)." },
+        rowData: { type: "object", description: "Objeto clave-valor con los datos de las columnas del paciente (los IDs de columna o nombres como claves, incluyendo el DNI y la fecha de atención)." }
+      },
+      required: ["tableId", "rowData"]
+    }
   }
 ];
 
@@ -451,6 +463,204 @@ export function setupMcp(
             savingsPercent: 99.5
           }
         };
+      }
+
+      case "upsert_patient": {
+        const { tableId, rowData } = args;
+        const table = db.tables.find(t => t.id === tableId);
+        if (!table) {
+          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+        }
+
+        // Buscar columna DNI de manera flexible
+        const dniCol = table.columns.find(c =>
+          c.id.toLowerCase() === "col_dni" ||
+          c.name.toLowerCase() === "dni" ||
+          c.name.toLowerCase().includes("dni") ||
+          c.name.toLowerCase() === "documento"
+        );
+
+        // Buscar columna de fecha de manera flexible
+        const dateCol = table.columns.find(c =>
+          c.id.toLowerCase() === "col_fecha" ||
+          c.id.toLowerCase() === "col_ultima_atencion" ||
+          c.name.toLowerCase().includes("atencion") ||
+          c.name.toLowerCase().includes("atención") ||
+          c.name.toLowerCase().includes("fecha") ||
+          c.name.toLowerCase().includes("quirurgica") ||
+          c.name.toLowerCase().includes("quirúrgica") ||
+          c.name.toLowerCase().includes("cirugia") ||
+          c.name.toLowerCase().includes("cirugía")
+        );
+
+        // Obtener el valor de DNI entrante
+        let inputDniValue: any = null;
+        if (dniCol) {
+          inputDniValue = rowData[dniCol.id] !== undefined ? rowData[dniCol.id] : (rowData[dniCol.name] || rowData["dni"] || rowData["DNI"] || rowData["col_dni"]);
+        } else {
+          const keyWithDni = Object.keys(rowData).find(k => k.toLowerCase().includes("dni") || k.toLowerCase() === "documento");
+          if (keyWithDni) {
+            inputDniValue = rowData[keyWithDni];
+          }
+        }
+
+        // Buscar si ya existe una fila con ese DNI
+        let existingRow: any = null;
+        if (dniCol && inputDniValue !== null && inputDniValue !== undefined && String(inputDniValue).trim() !== "") {
+          existingRow = table.rows?.find(r => String(r[dniCol.id]).trim() === String(inputDniValue).trim());
+        }
+
+        if (existingRow) {
+          // REGLA 1 (Match DNI encontrado) -> Realizar UPDATE inteligente con reglas
+          let shouldUpdate = true;
+          let dateExplanation = "No se detectó columna de fecha o valores de fecha válidos, procediendo con actualización directa.";
+
+          if (dateCol) {
+            const existingDateVal = existingRow[dateCol.id];
+            let incomingDateVal = rowData[dateCol.id] !== undefined ? rowData[dateCol.id] : (rowData[dateCol.name] || rowData["fecha"] || rowData["Fecha de cirugia"] || rowData["Fecha quirurgica"] || rowData["ultima_atencion"]);
+
+            if (existingDateVal && incomingDateVal) {
+              const timeExisting = new Date(existingDateVal).getTime();
+              const timeIncoming = new Date(incomingDateVal).getTime();
+
+              if (!isNaN(timeExisting) && !isNaN(timeIncoming)) {
+                if (timeIncoming < timeExisting) {
+                  shouldUpdate = false;
+                  dateExplanation = `La fecha entrante (${incomingDateVal}) es anterior a la existente (${existingDateVal}). Se conservó la versión más reciente según la Regla 2.`;
+                } else {
+                  dateExplanation = `La fecha entrante (${incomingDateVal}) es más reciente o igual a la existente (${existingDateVal}). Se procede a actualizar los campos válidos.`;
+                }
+              }
+            }
+          }
+
+          if (shouldUpdate) {
+            table.columns.forEach(col => {
+              // Excepciones: archivos (no sobrescribir desde carga de texto)
+              const isFileCol = col.type === "file" || col.name.toLowerCase().includes("laboratorio") || col.name.toLowerCase().includes("estudio") || col.name.toLowerCase().includes("archivo");
+              // Campos de estado (siempre sobrescribir si viene un valor nuevo)
+              const isStatusCol = col.name.toLowerCase() === "estado" || col.name.toLowerCase() === "estado contacto" || col.id.toLowerCase() === "col_estado" || col.id.toLowerCase() === "col_estado_contacto";
+
+              if (isFileCol) {
+                return; // ignorar archivos
+              }
+
+              let incomingVal = rowData[col.id];
+              if (incomingVal === undefined && rowData[col.name] !== undefined) {
+                incomingVal = rowData[col.name];
+              }
+
+              if (isStatusCol) {
+                if (incomingVal !== undefined) {
+                  existingRow[col.id] = incomingVal === null ? null : String(incomingVal);
+                }
+                return;
+              }
+
+              // REGLA 3: Solo sobrescribir campos con valor presente (no null, no vacío, no undefined)
+              const hasValidIncoming = incomingVal !== undefined && incomingVal !== null && String(incomingVal).trim() !== "";
+              if (hasValidIncoming) {
+                if (col.type === "number") {
+                  existingRow[col.id] = Number(incomingVal);
+                } else if (col.type === "boolean") {
+                  existingRow[col.id] = Boolean(incomingVal);
+                } else {
+                  existingRow[col.id] = String(incomingVal);
+                }
+              }
+            });
+
+            // Registrar Log de auditoría
+            db.logs.push({
+              id: "log_" + Date.now(),
+              timestamp: new Date().toISOString(),
+              user: "Agente MCP AI",
+              action: "UPDATE",
+              tableId,
+              tableName: table.name,
+              details: `Smart Upsert: Registro de paciente actualizado para DNI: ${inputDniValue}.`
+            });
+
+            await saveDb(db);
+          }
+
+          const responseText = JSON.stringify({
+            status: shouldUpdate ? "updated" : "skipped_by_date",
+            patientId: existingRow.id,
+            dni: inputDniValue,
+            dateExplanation,
+            updatedRow: existingRow
+          }, null, 2);
+
+          const stats = calculateTokenSavings(db, responseText.length);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Operación Smart Upsert completada en '${table.name}':\n\n${responseText}\n\n💡 Optimización MCP: ${stats.savingsPercent}% de ahorro en tokens.`
+              }
+            ],
+            _stats: stats
+          };
+
+        } else {
+          // REGLA 1 (Match DNI no encontrado) -> Realizar INSERT normal
+          const newRowId = "row_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+          const newRow: Row = { id: newRowId };
+
+          table.columns.forEach(col => {
+            let incomingVal = rowData[col.id];
+            if (incomingVal === undefined && rowData[col.name] !== undefined) {
+              incomingVal = rowData[col.name];
+            }
+
+            if (incomingVal === undefined || incomingVal === null) {
+              newRow[col.id] = col.type === "boolean" ? false : null;
+            } else if (col.type === "number") {
+              newRow[col.id] = Number(incomingVal);
+            } else if (col.type === "boolean") {
+              newRow[col.id] = Boolean(incomingVal);
+            } else {
+              newRow[col.id] = String(incomingVal);
+            }
+          });
+
+          table.rows = table.rows || [];
+          table.rows.push(newRow);
+
+          // Registrar Log de auditoría
+          db.logs.push({
+            id: "log_" + Date.now(),
+            timestamp: new Date().toISOString(),
+            user: "Agente MCP AI",
+            action: "CREATE",
+            tableId,
+            tableName: table.name,
+            details: `Smart Upsert: Nuevo paciente insertado con DNI: ${inputDniValue} (ID: ${newRowId}).`
+          });
+
+          await saveDb(db);
+
+          const responseText = JSON.stringify({
+            status: "inserted",
+            patientId: newRowId,
+            dni: inputDniValue,
+            insertedRow: newRow
+          }, null, 2);
+
+          const stats = calculateTokenSavings(db, responseText.length);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Operación Smart Upsert completada en '${table.name}' (Fila Insertada):\n\n${responseText}\n\n💡 Optimización MCP: ${stats.savingsPercent}% de ahorro en tokens.`
+              }
+            ],
+            _stats: stats
+          };
+        }
       }
 
       default:

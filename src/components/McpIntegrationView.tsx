@@ -71,6 +71,17 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
         tableId: params.tableId,
         rowId: "row_p3"
       };
+    } else if (selectedTool === "upsert_patient") {
+      rpcParams = {
+        tableId: params.tableId,
+        rowData: {
+          col_dni: "12345678",
+          col_nombre: "Juan Pérez",
+          col_telefono: "555-0199",
+          col_fecha: new Date().toISOString().split("T")[0],
+          col_estado: "En Observación"
+        }
+      };
     }
 
     const requestObj = {
@@ -271,12 +282,13 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
                 <option value="insert_row">insert_row (Añadir fila simulada)</option>
                 <option value="update_row">update_row (Modificar fila simulada)</option>
                 <option value="delete_row">delete_row (Eliminar fila simulada)</option>
+                <option value="upsert_patient">upsert_patient (Upsert paciente inteligente)</option>
                 <option value="get_mcp_stats">get_mcp_stats (Análisis de tokens)</option>
               </select>
             </div>
 
             {/* Dynamic arguments fields based on chosen tool */}
-            {["get_table_schema", "query_rows", "insert_row", "update_row", "delete_row"].includes(selectedTool) && (
+            {["get_table_schema", "query_rows", "insert_row", "update_row", "delete_row", "upsert_patient"].includes(selectedTool) && (
               <div className="p-3.5 bg-zinc-950/40 rounded-xl border border-zinc-800/40 space-y-3">
                 <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
                   Parámetros de la Tool
@@ -536,7 +548,13 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
               <div className="flex gap-2 items-start">
                 <CheckCircle className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
                 <div>
-                  <strong className="text-zinc-200">insert_row / update_row / delete_row</strong>: Operaciones de escritura auditadas integradas con Postgres.
+                  <strong className="text-zinc-200">insert_row / update_row / delete_row</strong>: Operaciones de escritura auditadas integradas con la base de datos.
+                </div>
+              </div>
+              <div className="flex gap-2 items-start">
+                <CheckCircle className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-zinc-200">upsert_patient</strong>: Carga inteligente de pacientes con matching por DNI, prioridad temporal de versión y merge selectivo de campos no vacíos.
                 </div>
               </div>
             </div>
