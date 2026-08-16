@@ -588,6 +588,7 @@ export default function App() {
                 <KanbanView
                   table={activeTable}
                   onUpdateRow={handleUpdateRow}
+                  onDeleteRow={handleDeleteRow}
                   readOnly={currentUser.permissions === "read-only"}
                   isAdmin={currentUser.role === "admin"}
                   onSaveKanbanColumn={handleSaveKanbanColumn}
