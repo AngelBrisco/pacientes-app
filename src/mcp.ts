@@ -1,4 +1,6 @@
 import { Router, Request, Response } from "express";
+import fs from "fs";
+import path from "path";
 import { DbState, TableSchema, Row, Column } from "./types";
 
 interface McpTool {
@@ -34,18 +36,82 @@ const MCP_TOOLS: McpTool[] = [
   },
   {
     name: "query_rows",
-    description: "Consulta y recupera los registros de una tabla con soporte para paginación (limit, offset), búsqueda de texto, y ordenamiento. Evita descargar miles de filas a la vez, reduciendo drásticamente los tokens consumidos.",
+    description: "Consulta y recupera los registros de una tabla con soporte para paginación (limit, offset), búsqueda global de texto (searchTerm), búsqueda filtrada por campos específicos (filters) y ordenamiento. Evita descargar miles de filas a la vez, reduciendo drásticamente los tokens consumidos.",
     inputSchema: {
       type: "object",
       properties: {
         tableId: { type: "string", description: "ID de la tabla a consultar." },
         limit: { type: "number", description: "Número de filas a retornar (por defecto 20)." },
         offset: { type: "number", description: "Desplazamiento para paginación (por defecto 0)." },
-        searchTerm: { type: "string", description: "Filtro de búsqueda de texto opcional aplicado a todas las columnas." },
-        sortBy: { type: "string", description: "ID de la columna para ordenar." },
+        searchTerm: { type: "string", description: "Filtro de búsqueda de texto global opcional aplicado a todas las columnas." },
+        filters: { 
+          type: "object", 
+          description: "Filtros por campo/columna (ej: {'col_status': 'Completada', 'DNI': '12345678'} o {'col_fecha': {'operator': 'gte', 'value': '2026-01-01'}}). Permite filtrar por ID o nombre de columna." 
+        },
+        sortBy: { type: "string", description: "ID o nombre de la columna para ordenar." },
         sortOrder: { type: "string", enum: ["asc", "desc"], description: "Dirección de orden (asc o desc)." }
       },
       required: ["tableId"]
+    }
+  },
+  {
+    name: "filter_rows",
+    description: "Búsqueda avanzada y filtrado de registros por múltiples campos específicos en una tabla (ej. buscar por DNI, por Estado, por Responsable, o por rangos numéricos/fechas con operadores). Soporta paginación y ordenamiento.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tableId: { type: "string", description: "ID de la tabla donde buscar." },
+        filters: { 
+          type: "object", 
+          description: "Objeto de filtros por campo (clave: ID o nombre de columna; valor: valor exacto, texto parcial, o un objeto {'operator': 'equals'|'contains'|'gt'|'gte'|'lt'|'lte'|'ne'|'in', 'value': ...})." 
+        },
+        limit: { type: "number", description: "Límite de filas a retornar (por defecto 20)." },
+        offset: { type: "number", description: "Desplazamiento para paginación (por defecto 0)." },
+        sortBy: { type: "string", description: "ID o nombre de columna para ordenar." },
+        sortOrder: { type: "string", enum: ["asc", "desc"], description: "Dirección de orden (asc o desc)." }
+      },
+      required: ["tableId", "filters"]
+    }
+  },
+  {
+    name: "upload_file",
+    description: "Sube un archivo al almacenamiento persistente del sistema (PDF, imagen, estudio médico, notas o CSV) y opcionalmente lo asocia automáticamente a una fila y columna de tipo 'file'. Permite enviar contenido codificado en Base64 o directamente en texto plano (para informes generados por el agente sin tener que codificar a mano).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileName: { type: "string", description: "Nombre del archivo incluyendo su extensión (ej: 'informe_clinico.pdf', 'analisis.txt', 'ecografia.png')." },
+        fileContentBase64: { type: "string", description: "Contenido del archivo codificado en Base64 (para PDFs, imágenes o binarios)." },
+        fileTextContent: { type: "string", description: "Contenido del archivo en texto plano / markdown / json (alternativa directa sin codificar en base64)." },
+        tableId: { type: "string", description: "Opcional: ID de la tabla si se desea asociar directamente a un registro." },
+        rowId: { type: "string", description: "Opcional: ID del registro donde adjuntar el archivo (ej: 'row_p1')." },
+        columnId: { type: "string", description: "Opcional: ID o nombre de la columna de tipo 'file' donde asociar el archivo." }
+      },
+      required: ["fileName"]
+    }
+  },
+  {
+    name: "download_file",
+    description: "Descarga o lee el contenido de un archivo almacenado en las columnas de tipo 'file' o en el servidor mediante su URL o nombre de archivo. Si el archivo es de texto plano (txt, csv, json, md, html, log), devuelve su contenido legible directamente. Si es binario (PDF, imagen), devuelve su contenido en base64 junto a sus metadatos (tamaño, tipo MIME, fecha de modificación).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileUrl: { type: "string", description: "URL del archivo (ej: '/uploads/1725..._analisis.pdf') o nombre del archivo guardado en el servidor." },
+        encoding: { type: "string", enum: ["auto", "text", "base64"], description: "Modo de codificación: 'auto' (devuelve texto si es legible, o base64 si es binario/pdf), 'text' (fuerza lectura como texto UTF-8), 'base64' (fuerza salida en Base64)." }
+      },
+      required: ["fileUrl"]
+    }
+  },
+  {
+    name: "list_row_files",
+    description: "Lista todos los archivos adjuntos en las columnas de tipo 'file' de un registro en una tabla, mostrando sus nombres, URLs de descarga/lectura, tamaños formateados en KB y tipos MIME.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tableId: { type: "string", description: "ID de la tabla." },
+        rowId: { type: "string", description: "ID del registro a inspeccionar." },
+        columnId: { type: "string", description: "Opcional: ID o nombre de una columna específica de tipo 'file'." }
+      },
+      required: ["tableId", "rowId"]
     }
   },
   {
@@ -138,6 +204,229 @@ export function setupMcp(
     };
   };
 
+  // Helper: Detección de tipos MIME para archivos
+  const getMimeType = (fileName: string): string => {
+    const ext = path.extname(fileName).toLowerCase();
+    switch (ext) {
+      case ".pdf": return "application/pdf";
+      case ".png": return "image/png";
+      case ".jpg":
+      case ".jpeg": return "image/jpeg";
+      case ".gif": return "image/gif";
+      case ".webp": return "image/webp";
+      case ".svg": return "image/svg+xml";
+      case ".txt": return "text/plain";
+      case ".csv": return "text/csv";
+      case ".json": return "application/json";
+      case ".md": return "text/markdown";
+      case ".html": return "text/html";
+      case ".xml": return "application/xml";
+      case ".log": return "text/plain";
+      default: return "application/octet-stream";
+    }
+  };
+
+  // Helper: Comprobar si un archivo es legible como texto
+  const isTextFile = (fileName: string): boolean => {
+    const ext = path.extname(fileName).toLowerCase();
+    return [".txt", ".csv", ".json", ".md", ".html", ".xml", ".log", ".tsv", ".yaml", ".yml"].includes(ext);
+  };
+
+  // Helper: Encontrar columna de tabla por ID o Nombre (insensible a mayúsculas/minúsculas y acentos)
+  const findColumn = (table: TableSchema, colKey: string): Column | undefined => {
+    if (!colKey) return undefined;
+    const cleanKey = String(colKey).trim().toLowerCase();
+    const normalizedKey = cleanKey.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    
+    return table.columns.find(c => {
+      const cId = c.id.toLowerCase();
+      const cName = c.name.toLowerCase();
+      const cNameNorm = cName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      return (
+        cId === cleanKey ||
+        cName === cleanKey ||
+        cNameNorm === normalizedKey ||
+        cName.replace(/[^a-z0-9]/g, "") === cleanKey.replace(/[^a-z0-9]/g, "")
+      );
+    });
+  };
+
+  // Helper: Evaluación de filtros por campo
+  const matchesFilters = (row: Row, table: TableSchema, filters: Record<string, any>): boolean => {
+    if (!filters || typeof filters !== "object") return true;
+
+    for (const [filterKey, criterion] of Object.entries(filters)) {
+      if (criterion === undefined || criterion === null) continue;
+
+      const col = findColumn(table, filterKey);
+      const rowVal = col ? row[col.id] : (row[filterKey] !== undefined ? row[filterKey] : undefined);
+
+      // Si el criterio es un objeto estructurado con operador { operator/op, value/val }
+      if (typeof criterion === "object" && !Array.isArray(criterion) && (criterion.operator !== undefined || criterion.op !== undefined)) {
+        const op = String(criterion.operator || criterion.op || "equals").toLowerCase().trim();
+        const target = criterion.value !== undefined ? criterion.value : criterion.val;
+
+        switch (op) {
+          case "equals":
+          case "eq":
+          case "==": {
+            if (rowVal === undefined || rowVal === null) {
+              if (target !== null && target !== "" && target !== undefined) return false;
+              break;
+            }
+            if (typeof target === "boolean" || typeof rowVal === "boolean") {
+              const bRow = Boolean(rowVal);
+              const bTarget = target === true || String(target).toLowerCase() === "true" || String(target) === "1" || String(target).toLowerCase() === "si";
+              if (bRow !== bTarget) return false;
+              break;
+            }
+            if (typeof target === "number" || typeof rowVal === "number") {
+              if (Number(rowVal) !== Number(target)) return false;
+              break;
+            }
+            if (String(rowVal).trim().toLowerCase() !== String(target).trim().toLowerCase()) return false;
+            break;
+          }
+
+          case "ne":
+          case "neq":
+          case "!=": {
+            if (String(rowVal ?? "").trim().toLowerCase() === String(target ?? "").trim().toLowerCase()) return false;
+            break;
+          }
+
+          case "contains":
+          case "like":
+          case "includes": {
+            if (!String(rowVal ?? "").toLowerCase().includes(String(target ?? "").toLowerCase())) return false;
+            break;
+          }
+
+          case "startswith": {
+            if (!String(rowVal ?? "").toLowerCase().startsWith(String(target ?? "").toLowerCase())) return false;
+            break;
+          }
+
+          case "endswith": {
+            if (!String(rowVal ?? "").toLowerCase().endsWith(String(target ?? "").toLowerCase())) return false;
+            break;
+          }
+
+          case "gt":
+          case ">": {
+            const numA = Number(rowVal);
+            const numB = Number(target);
+            if (!isNaN(numA) && !isNaN(numB)) {
+              if (!(numA > numB)) return false;
+            } else {
+              const dateA = new Date(rowVal).getTime();
+              const dateB = new Date(target).getTime();
+              if (!isNaN(dateA) && !isNaN(dateB)) {
+                if (!(dateA > dateB)) return false;
+              } else {
+                if (!(String(rowVal) > String(target))) return false;
+              }
+            }
+            break;
+          }
+
+          case "gte":
+          case ">=": {
+            const numA = Number(rowVal);
+            const numB = Number(target);
+            if (!isNaN(numA) && !isNaN(numB)) {
+              if (!(numA >= numB)) return false;
+            } else {
+              const dateA = new Date(rowVal).getTime();
+              const dateB = new Date(target).getTime();
+              if (!isNaN(dateA) && !isNaN(dateB)) {
+                if (!(dateA >= dateB)) return false;
+              } else {
+                if (!(String(rowVal) >= String(target))) return false;
+              }
+            }
+            break;
+          }
+
+          case "lt":
+          case "<": {
+            const numA = Number(rowVal);
+            const numB = Number(target);
+            if (!isNaN(numA) && !isNaN(numB)) {
+              if (!(numA < numB)) return false;
+            } else {
+              const dateA = new Date(rowVal).getTime();
+              const dateB = new Date(target).getTime();
+              if (!isNaN(dateA) && !isNaN(dateB)) {
+                if (!(dateA < dateB)) return false;
+              } else {
+                if (!(String(rowVal) < String(target))) return false;
+              }
+            }
+            break;
+          }
+
+          case "lte":
+          case "<=": {
+            const numA = Number(rowVal);
+            const numB = Number(target);
+            if (!isNaN(numA) && !isNaN(numB)) {
+              if (!(numA <= numB)) return false;
+            } else {
+              const dateA = new Date(rowVal).getTime();
+              const dateB = new Date(target).getTime();
+              if (!isNaN(dateA) && !isNaN(dateB)) {
+                if (!(dateA <= dateB)) return false;
+              } else {
+                if (!(String(rowVal) <= String(target))) return false;
+              }
+            }
+            break;
+          }
+
+          case "in": {
+            if (Array.isArray(target)) {
+              const match = target.some(t => String(t).trim().toLowerCase() === String(rowVal ?? "").trim().toLowerCase());
+              if (!match) return false;
+            }
+            break;
+          }
+
+          case "empty":
+          case "is_empty": {
+            const isEmpty = rowVal === undefined || rowVal === null || String(rowVal).trim() === "" || (Array.isArray(rowVal) && rowVal.length === 0);
+            if (!isEmpty) return false;
+            break;
+          }
+
+          case "not_empty":
+          case "is_not_empty": {
+            const isEmpty = rowVal === undefined || rowVal === null || String(rowVal).trim() === "" || (Array.isArray(rowVal) && rowVal.length === 0);
+            if (isEmpty) return false;
+            break;
+          }
+        }
+      } else if (Array.isArray(criterion)) {
+        const match = criterion.some(t => String(t).trim().toLowerCase() === String(rowVal ?? "").trim().toLowerCase());
+        if (!match) return false;
+      } else if (typeof criterion === "boolean") {
+        const bRow = Boolean(rowVal);
+        if (bRow !== criterion) return false;
+      } else if (typeof criterion === "number") {
+        if (Number(rowVal) !== criterion) return false;
+      } else {
+        // String criterion: si es string, evaluar coincidencia
+        const targetStr = String(criterion).trim().toLowerCase();
+        const valStr = String(rowVal ?? "").trim().toLowerCase();
+        if (!valStr.includes(targetStr)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  };
+
   // Función ejecutora de las herramientas (Tools implementation)
   const handleToolExecution = async (name: string, args: any): Promise<any> => {
     const db = await loadDb();
@@ -168,9 +457,9 @@ export function setupMcp(
 
       case "get_table_schema": {
         const { tableId } = args;
-        const table = db.tables.find(t => t.id === tableId);
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === tableId.toLowerCase());
         if (!table) {
-          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
         }
 
         const result = {
@@ -198,16 +487,22 @@ export function setupMcp(
         };
       }
 
+      case "filter_rows":
       case "query_rows": {
-        const { tableId, limit = 20, offset = 0, searchTerm = "", sortBy = "", sortOrder = "asc" } = args;
-        const table = db.tables.find(t => t.id === tableId);
+        const { tableId, limit = 20, offset = 0, searchTerm = "", filters = null, sortBy = "", sortOrder = "asc" } = args;
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === tableId.toLowerCase());
         if (!table) {
-          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
         }
 
         let rows = [...(table.rows || [])];
 
-        // 1. Filtrar si hay búsqueda
+        // 1. Filtrar por campos específicos (filters)
+        if (filters && typeof filters === "object" && Object.keys(filters).length > 0) {
+          rows = rows.filter(row => matchesFilters(row, table, filters));
+        }
+
+        // 2. Filtrar si hay búsqueda global (searchTerm)
         if (searchTerm) {
           const term = String(searchTerm).toLowerCase();
           rows = rows.filter(row => {
@@ -220,11 +515,13 @@ export function setupMcp(
 
         const totalFiltered = rows.length;
 
-        // 2. Ordenar si se especifica columna
+        // 3. Ordenar si se especifica columna
         if (sortBy) {
+          const sortCol = findColumn(table, sortBy);
+          const sortKey = sortCol ? sortCol.id : sortBy;
           rows.sort((a, b) => {
-            const valA = a[sortBy];
-            const valB = b[sortBy];
+            const valA = a[sortKey];
+            const valB = b[sortKey];
             if (valA === undefined || valA === null) return 1;
             if (valB === undefined || valB === null) return -1;
             
@@ -239,11 +536,11 @@ export function setupMcp(
           });
         }
 
-        // 3. Paginar
+        // 4. Paginar
         const paginatedRows = rows.slice(offset, offset + limit);
 
         const result = {
-          tableId,
+          tableId: table.id,
           tableName: table.name,
           pagination: {
             limit,
@@ -251,6 +548,8 @@ export function setupMcp(
             totalFiltered,
             totalTotal: table.rows ? table.rows.length : 0
           },
+          appliedFilters: filters || undefined,
+          searchTerm: searchTerm || undefined,
           rows: paginatedRows
         };
 
@@ -661,6 +960,262 @@ export function setupMcp(
             _stats: stats
           };
         }
+      }
+
+      case "upload_file": {
+        const { fileName, fileContentBase64, fileTextContent, tableId, rowId, columnId } = args;
+        if (!fileName) {
+          throw new Error("El parámetro 'fileName' es obligatorio.");
+        }
+        if (!fileContentBase64 && fileTextContent === undefined) {
+          throw new Error("Debe proporcionar 'fileContentBase64' o 'fileTextContent' para subir el archivo.");
+        }
+
+        const uploadsDir = path.join(process.cwd(), "data", "uploads");
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        let buffer: Buffer;
+        if (fileContentBase64) {
+          let cleanBase64 = String(fileContentBase64);
+          if (cleanBase64.indexOf(";base64,") !== -1) {
+            cleanBase64 = cleanBase64.split(";base64,").pop() || "";
+          }
+          buffer = Buffer.from(cleanBase64, "base64");
+        } else {
+          buffer = Buffer.from(String(fileTextContent), "utf-8");
+        }
+
+        const rawBase = path.basename(fileName);
+        const cleanName = rawBase.replace(/[^a-zA-Z0-9_.-]/g, "_");
+        const storedFileName = `${Date.now()}_${cleanName}`;
+        const filePath = path.join(uploadsDir, storedFileName);
+
+        fs.writeFileSync(filePath, buffer);
+        const publicUrl = `/uploads/${storedFileName}`;
+
+        let rowAttached = false;
+        let targetTableName = "";
+        let targetRowId = "";
+        let attachedColumnName = "";
+
+        if (tableId && rowId) {
+          const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === tableId.toLowerCase());
+          if (table) {
+            targetTableName = table.name;
+            const row = table.rows?.find(r => r.id === rowId);
+            if (row) {
+              targetRowId = row.id;
+              // Buscar columna file
+              let fileCol: Column | undefined;
+              if (columnId) {
+                fileCol = findColumn(table, columnId);
+              }
+              if (!fileCol) {
+                fileCol = table.columns.find(c => c.type === "file");
+              }
+              if (!fileCol) {
+                // Buscar por nombre si no tiene tipo file explícito
+                fileCol = table.columns.find(c => {
+                  const n = c.name.toLowerCase();
+                  return n.includes("archivo") || n.includes("estudio") || n.includes("adjunto") || n.includes("laboratorio") || n.includes("documento");
+                });
+              }
+
+              if (fileCol) {
+                attachedColumnName = fileCol.name;
+                const currentVal = row[fileCol.id];
+                let currentList: string[] = [];
+                if (Array.isArray(currentVal)) {
+                  currentList = [...currentVal];
+                } else if (typeof currentVal === "string" && currentVal.trim() !== "") {
+                  if (currentVal.startsWith("[") && currentVal.endsWith("]")) {
+                    try { currentList = JSON.parse(currentVal); } catch { currentList = [currentVal]; }
+                  } else {
+                    currentList = [currentVal];
+                  }
+                }
+                currentList.push(publicUrl);
+                row[fileCol.id] = currentList;
+                rowAttached = true;
+
+                db.logs.push({
+                  id: "log_" + Date.now(),
+                  timestamp: new Date().toISOString(),
+                  user: "Agente MCP AI",
+                  action: "UPDATE",
+                  tableId: table.id,
+                  tableName: table.name,
+                  details: `Archivo subido y adjuntado: '${cleanName}' en columna '${fileCol.name}' del registro '${rowId}'.`
+                });
+
+                await saveDb(db);
+              }
+            }
+          }
+        }
+
+        const mime = getMimeType(cleanName);
+        const resultData = {
+          status: "success",
+          fileName: cleanName,
+          storedFileName,
+          fileUrl: publicUrl,
+          sizeBytes: buffer.length,
+          sizeFormatted: `${(buffer.length / 1024).toFixed(2)} KB`,
+          mimeType: mime,
+          attachedToRow: rowAttached,
+          tableId: rowAttached ? tableId : undefined,
+          tableName: rowAttached ? targetTableName : undefined,
+          rowId: rowAttached ? targetRowId : undefined,
+          columnName: rowAttached ? attachedColumnName : undefined
+        };
+
+        const responseText = JSON.stringify(resultData, null, 2);
+        const stats = calculateTokenSavings(db, responseText.length);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Archivo '${cleanName}' subido correctamente al servidor:\n\n${responseText}\n\n💡 Optimización MCP: ${stats.savingsPercent}% de ahorro en tokens.`
+            }
+          ],
+          _stats: stats
+        };
+      }
+
+      case "download_file": {
+        const { fileUrl, encoding = "auto" } = args;
+        if (!fileUrl) {
+          throw new Error("El parámetro 'fileUrl' es obligatorio.");
+        }
+
+        const uploadsDir = path.join(process.cwd(), "data", "uploads");
+        const fileName = path.basename(fileUrl);
+        const filePath = path.join(uploadsDir, fileName);
+
+        if (!fs.existsSync(filePath)) {
+          throw new Error(`Archivo no encontrado en el servidor: '${fileName}'. Verifique la URL o nombre especificado.`);
+        }
+
+        const stat = fs.statSync(filePath);
+        const isText = isTextFile(fileName);
+        const mimeType = getMimeType(fileName);
+
+        let textContent: string | undefined;
+        let contentBase64: string | undefined;
+
+        const shouldReturnText = encoding === "text" || (encoding === "auto" && isText);
+
+        if (shouldReturnText) {
+          textContent = fs.readFileSync(filePath, "utf-8");
+        } else {
+          const buffer = fs.readFileSync(filePath);
+          contentBase64 = buffer.toString("base64");
+        }
+
+        const resultData: any = {
+          fileName,
+          fileUrl: `/uploads/${fileName}`,
+          sizeBytes: stat.size,
+          sizeFormatted: `${(stat.size / 1024).toFixed(2)} KB`,
+          mimeType,
+          isText,
+          encoding: shouldReturnText ? "utf-8" : "base64",
+          lastModified: stat.mtime.toISOString(),
+          textContent: textContent,
+          contentBase64: contentBase64
+        };
+
+        const responseText = JSON.stringify(resultData, null, 2);
+        const stats = calculateTokenSavings(db, responseText.length);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Archivo recuperado exitosamente (${fileName}):\n\n${responseText}\n\n💡 Optimización MCP: ${stats.savingsPercent}% de ahorro.`
+            }
+          ],
+          _stats: stats
+        };
+      }
+
+      case "list_row_files": {
+        const { tableId, rowId, columnId } = args;
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === tableId.toLowerCase());
+        if (!table) {
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
+        }
+        const row = table.rows?.find(r => r.id === rowId);
+        if (!row) {
+          throw new Error(`Fila con ID '${rowId}' no encontrada en '${table.name}'.`);
+        }
+
+        const targetCols = columnId
+          ? [findColumn(table, columnId)].filter(Boolean) as Column[]
+          : table.columns.filter(c => c.type === "file" || ["archivo", "adjunto", "estudio", "laboratorio"].some(w => c.name.toLowerCase().includes(w)));
+
+        const uploadsDir = path.join(process.cwd(), "data", "uploads");
+        const filesFound: any[] = [];
+
+        targetCols.forEach(col => {
+          const val = row[col.id];
+          let fileUrls: string[] = [];
+          if (Array.isArray(val)) {
+            fileUrls = val;
+          } else if (typeof val === "string" && val.trim() !== "") {
+            if (val.startsWith("[") && val.endsWith("]")) {
+              try { fileUrls = JSON.parse(val); } catch { fileUrls = [val]; }
+            } else {
+              fileUrls = [val];
+            }
+          }
+
+          fileUrls.forEach(url => {
+            const fileName = path.basename(url);
+            const filePath = path.join(uploadsDir, fileName);
+            const exists = fs.existsSync(filePath);
+            let sizeBytes = 0;
+            if (exists) {
+              try { sizeBytes = fs.statSync(filePath).size; } catch {}
+            }
+
+            filesFound.push({
+              columnId: col.id,
+              columnName: col.name,
+              fileName,
+              fileUrl: url,
+              existsOnDisk: exists,
+              sizeBytes,
+              sizeFormatted: exists ? `${(sizeBytes / 1024).toFixed(2)} KB` : "No disponible",
+              mimeType: getMimeType(fileName),
+              isText: isTextFile(fileName)
+            });
+          });
+        });
+
+        const responseText = JSON.stringify({
+          tableId: table.id,
+          tableName: table.name,
+          rowId,
+          totalFiles: filesFound.length,
+          files: filesFound
+        }, null, 2);
+
+        const stats = calculateTokenSavings(db, responseText.length);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Archivos adjuntos en la fila '${rowId}' (${table.name}):\n\n${responseText}\n\n💡 Optimización MCP: ${stats.savingsPercent}% de ahorro.`
+            }
+          ],
+          _stats: stats
+        };
       }
 
       default:

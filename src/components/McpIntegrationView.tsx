@@ -49,6 +49,32 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
         sortBy: params.sortBy,
         sortOrder: params.sortOrder
       };
+    } else if (selectedTool === "filter_rows") {
+      rpcParams = {
+        tableId: params.tableId,
+        filters: {
+          col_status: "Completada"
+        },
+        limit: 10,
+        offset: 0
+      };
+    } else if (selectedTool === "upload_file") {
+      rpcParams = {
+        fileName: "informe_medico_consulta.txt",
+        fileTextContent: "Paciente evaluado con evolución favorable. Estudios complementarios completados sin novedades clínicas.",
+        tableId: params.tableId,
+        rowId: "row_p1"
+      };
+    } else if (selectedTool === "download_file") {
+      rpcParams = {
+        fileUrl: "/uploads/informe_medico_consulta.txt",
+        encoding: "auto"
+      };
+    } else if (selectedTool === "list_row_files") {
+      rpcParams = {
+        tableId: params.tableId,
+        rowId: "row_p1"
+      };
     } else if (selectedTool === "insert_row") {
       rpcParams = {
         tableId: params.tableId,
@@ -278,7 +304,11 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
               >
                 <option value="list_tables">list_tables (Listar tablas de DB)</option>
                 <option value="get_table_schema">get_table_schema (Obtener columnas)</option>
-                <option value="query_rows">query_rows (Consultar registros)</option>
+                <option value="query_rows">query_rows (Consultar registros con filtros)</option>
+                <option value="filter_rows">filter_rows (Búsqueda avanzada por campos)</option>
+                <option value="upload_file">upload_file (Subir archivo a campo file)</option>
+                <option value="download_file">download_file (Descargar/leer archivo)</option>
+                <option value="list_row_files">list_row_files (Listar archivos de fila)</option>
                 <option value="insert_row">insert_row (Añadir fila simulada)</option>
                 <option value="update_row">update_row (Modificar fila simulada)</option>
                 <option value="delete_row">delete_row (Eliminar fila simulada)</option>
@@ -288,7 +318,7 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
             </div>
 
             {/* Dynamic arguments fields based on chosen tool */}
-            {["get_table_schema", "query_rows", "insert_row", "update_row", "delete_row", "upsert_patient"].includes(selectedTool) && (
+            {["get_table_schema", "query_rows", "filter_rows", "upload_file", "download_file", "list_row_files", "insert_row", "update_row", "delete_row", "upsert_patient"].includes(selectedTool) && (
               <div className="p-3.5 bg-zinc-950/40 rounded-xl border border-zinc-800/40 space-y-3">
                 <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
                   Parámetros de la Tool
@@ -542,7 +572,19 @@ export default function McpIntegrationView({ tables }: McpIntegrationViewProps) 
               <div className="flex gap-2 items-start">
                 <CheckCircle className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
                 <div>
-                  <strong className="text-zinc-200">query_rows</strong>: Lectura inteligente con paginado limit, filtros de búsqueda y ordenamientos.
+                  <strong className="text-zinc-200">query_rows / filter_rows</strong>: Búsqueda avanzada filtrada por múltiples campos/columnas (DNI, Estado, fechas con operadores), ordenamiento y paginación.
+                </div>
+              </div>
+              <div className="flex gap-2 items-start">
+                <CheckCircle className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-zinc-200">upload_file</strong>: Sube archivos físicos (PDFs, estudios, texto o Base64) y los asocia directamente a registros con campos de tipo file.
+                </div>
+              </div>
+              <div className="flex gap-2 items-start">
+                <CheckCircle className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-zinc-200">download_file / list_row_files</strong>: Descarga o lee el contenido de archivos (texto plano o Base64) y lista archivos adjuntos en registros.
                 </div>
               </div>
               <div className="flex gap-2 items-start">
