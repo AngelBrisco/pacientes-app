@@ -20,7 +20,14 @@ import {
   Download,
   FileSpreadsheet,
   Braces,
-  RefreshCw
+  RefreshCw,
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  Columns3,
+  Minimize2,
+  Maximize2,
+  RotateCcw
 } from "lucide-react";
 
 interface TableViewProps {
@@ -82,6 +89,259 @@ export default function TableView({
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null);
   const [editingCellValue, setEditingCellValue] = useState<any>("");
+
+  // 1. Column Widths & Resizing state (Allows shrinking down to 50px!)
+  const defaultWidthForType = (type: ColumnType): number => {
+    switch (type) {
+      case "boolean": return 90;
+      case "number": return 110;
+      case "date": return 130;
+      case "select": return 150;
+      case "file": return 180;
+      case "text":
+      default: return 160;
+    }
+  };
+
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(`nococlone_col_widths_${table.id}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    const initial: Record<string, number> = {};
+    table.columns.forEach(col => {
+      initial[col.id] = defaultWidthForType(col.type);
+    });
+    return initial;
+  });
+
+  // Keep columnWidths in sync when table or columns change
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`nococlone_col_widths_${table.id}`);
+      const parsed = saved ? JSON.parse(saved) : {};
+      const updated: Record<string, number> = {};
+      table.columns.forEach(col => {
+        updated[col.id] = parsed[col.id] || defaultWidthForType(col.type);
+      });
+      setColumnWidths(updated);
+    } catch {
+      const initial: Record<string, number> = {};
+      table.columns.forEach(col => {
+        initial[col.id] = defaultWidthForType(col.type);
+      });
+      setColumnWidths(initial);
+    }
+  }, [table.id, table.columns]);
+
+  const [showWidthsMenu, setShowWidthsMenu] = useState(false);
+  const resizingRef = React.useRef<{
+    colId: string;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+  const startResizing = (colId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentWidth = columnWidths[colId] || defaultWidthForType(table.columns.find(c => c.id === colId)?.type || "text");
+    resizingRef.current = {
+      colId,
+      startX: e.clientX,
+      startWidth: currentWidth,
+    };
+    setIsResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const deltaX = moveEvent.clientX - resizingRef.current.startX;
+      // Allow shrinking down to 50px
+      const newWidth = Math.max(50, Math.round(resizingRef.current.startWidth + deltaX));
+      setColumnWidths(prev => ({
+        ...prev,
+        [resizingRef.current!.colId]: newWidth
+      }));
+    };
+
+    const onMouseUp = () => {
+      if (resizingRef.current) {
+        setColumnWidths(latest => {
+          try {
+            localStorage.setItem(`nococlone_col_widths_${table.id}`, JSON.stringify(latest));
+          } catch {}
+          return latest;
+        });
+      }
+      resizingRef.current = null;
+      setIsResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleResetColumnWidth = (colId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const col = table.columns.find(c => c.id === colId);
+    const def = defaultWidthForType(col?.type || "text");
+    setColumnWidths(prev => {
+      const next = { ...prev, [colId]: def };
+      try {
+        localStorage.setItem(`nococlone_col_widths_${table.id}`, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleApplyPresetWidths = (preset: "compact" | "normal" | "wide") => {
+    const updated: Record<string, number> = {};
+    table.columns.forEach(col => {
+      if (preset === "compact") {
+        updated[col.id] = col.type === "boolean" ? 65 : col.type === "number" ? 80 : 100;
+      } else if (preset === "wide") {
+        updated[col.id] = 240;
+      } else {
+        updated[col.id] = defaultWidthForType(col.type);
+      }
+    });
+    setColumnWidths(updated);
+    try {
+      localStorage.setItem(`nococlone_col_widths_${table.id}`, JSON.stringify(updated));
+    } catch {}
+    setShowWidthsMenu(false);
+  };
+
+  const handleResetAllWidths = () => {
+    const initial: Record<string, number> = {};
+    table.columns.forEach(col => {
+      initial[col.id] = defaultWidthForType(col.type);
+    });
+    setColumnWidths(initial);
+    try {
+      localStorage.removeItem(`nococlone_col_widths_${table.id}`);
+    } catch {}
+    setShowWidthsMenu(false);
+  };
+
+  // 2. Single-click Row Marking / Tracking state
+  const [markedRowIds, setMarkedRowIds] = useState<Set<string>>(new Set());
+
+  const handleRowClick = (rowId: string, e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    // Don't toggle mark if clicking on interactive controls
+    if (
+      target.closest("button") || 
+      target.closest("input") || 
+      target.closest("select") || 
+      target.closest("a") || 
+      target.closest(".no-mark-trigger")
+    ) {
+      return;
+    }
+
+    setMarkedRowIds(prev => {
+      const next = new Set(prev);
+      if (next.has(rowId)) {
+        next.delete(rowId);
+      } else {
+        next.add(rowId);
+      }
+      return next;
+    });
+  };
+
+  const handleClearMarkedRows = () => {
+    setMarkedRowIds(new Set());
+  };
+
+  // 3. Horizontal Scrollbar Synchronization and Viewport Containment
+  const tableScrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const topScrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const [tableContentWidth, setTableContentWidth] = useState(0);
+  const [canScrollHorizontal, setCanScrollHorizontal] = useState(false);
+  const [isContainedScroll, setIsContainedScroll] = useState(true); // Default to contained height with sticky header
+  const isSyncingTop = React.useRef(false);
+  const isSyncingBottom = React.useRef(false);
+
+  const measureScroll = React.useCallback(() => {
+    if (tableScrollContainerRef.current) {
+      const scrollW = tableScrollContainerRef.current.scrollWidth;
+      const clientW = tableScrollContainerRef.current.clientWidth;
+      setTableContentWidth(scrollW);
+      setCanScrollHorizontal(scrollW > clientW + 2);
+    }
+  }, []);
+
+  // Recalculate horizontal scroll dimensions
+  React.useEffect(() => {
+    measureScroll();
+    const handleResize = () => measureScroll();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [table.columns, columnWidths, measureScroll, table.rows?.length]);
+
+  const handleTopScroll = () => {
+    if (isSyncingBottom.current) {
+      isSyncingBottom.current = false;
+      return;
+    }
+    if (topScrollContainerRef.current && tableScrollContainerRef.current) {
+      isSyncingTop.current = true;
+      tableScrollContainerRef.current.scrollLeft = topScrollContainerRef.current.scrollLeft;
+    }
+  };
+
+  const handleBottomScroll = () => {
+    if (isSyncingTop.current) {
+      isSyncingTop.current = false;
+      return;
+    }
+    if (topScrollContainerRef.current && tableScrollContainerRef.current) {
+      isSyncingBottom.current = true;
+      topScrollContainerRef.current.scrollLeft = tableScrollContainerRef.current.scrollLeft;
+    }
+  };
+
+  const handleScrollHorizontal = (direction: "left" | "right") => {
+    if (tableScrollContainerRef.current) {
+      const delta = direction === "left" ? -280 : 280;
+      tableScrollContainerRef.current.scrollBy({ left: delta, behavior: "smooth" });
+    }
+  };
+
+  // Global escape key handler to clear marked rows
+  React.useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !editingCell) {
+        if (markedRowIds.size > 0) {
+          setMarkedRowIds(new Set());
+        }
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [editingCell, markedRowIds]);
+
+  // Total table pixel width calculation
+  const totalCalculatedWidth = React.useMemo(() => {
+    const indexColWidth = 56;
+    const actionsColWidth = 100;
+    const colsWidthSum = table.columns.reduce(
+      (sum, col) => sum + (columnWidths[col.id] || defaultWidthForType(col.type)),
+      0
+    );
+    return indexColWidth + actionsColWidth + colsWidthSum;
+  }, [table.columns, columnWidths]);
 
   const handleStartInlineEdit = (row: Row, colId: string, colType: ColumnType) => {
     if (readOnly || colType === "file") return;
@@ -620,23 +880,118 @@ export default function TableView({
       
       {/* Search Input, Actions and Dynamic Controllers */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4 shadow-sm" id="table-actions-toolbar">
-        {/* Search */}
-        <div className="relative w-64 max-w-full">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-zinc-500 pointer-events-none">
-            <Search className="w-4 h-4" />
-          </span>
-          <input
-            type="text"
-            placeholder="Buscar en esta tabla..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
-            id="table-search-input"
-          />
+        {/* Search & Marked Rows status */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="relative w-64 max-w-full">
+            <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-zinc-500 pointer-events-none">
+              <Search className="w-4 h-4" />
+            </span>
+            <input
+              type="text"
+              placeholder="Buscar en esta tabla..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+              id="table-search-input"
+            />
+          </div>
+
+          {/* Marked Rows Tracker Indicator */}
+          {markedRowIds.size > 0 && (
+            <div 
+              className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/15 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 font-sans animate-in fade-in"
+              id="marked-rows-indicator-pill"
+            >
+              <Bookmark className="w-3.5 h-3.5 text-indigo-400 fill-indigo-400 shrink-0" />
+              <span>
+                <strong>{markedRowIds.size}</strong> {markedRowIds.size === 1 ? "fila marcada" : "filas marcadas"}
+              </span>
+              <button
+                type="button"
+                onClick={handleClearMarkedRows}
+                className="text-indigo-400 hover:text-indigo-200 ml-1 p-0.5 rounded hover:bg-indigo-500/20 cursor-pointer text-[11px] flex items-center gap-0.5"
+                title="Desmarcar todas las filas (o presiona Escape)"
+              >
+                <X className="w-3 h-3" />
+                <span>Desmarcar</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Create column & user trigger controls */}
-        <div className="flex items-center gap-2 relative">
+        <div className="flex items-center gap-2 relative flex-wrap">
+          {/* Column Width Presets Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              id="btn-column-widths-menu"
+              onClick={() => setShowWidthsMenu(!showWidthsMenu)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 hover:text-white border border-zinc-700/85 rounded-lg text-xs font-medium cursor-pointer transition-all shadow-xs"
+              title="Ajustar anchos de columnas"
+            >
+              <Columns3 className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Ancho Columnas</span>
+            </button>
+
+            {showWidthsMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowWidthsMenu(false)} />
+                <div className="absolute right-0 mt-2 w-52 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-1 text-xs">
+                  <div className="px-3 py-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wider font-bold border-b border-zinc-850">
+                    Ajuste de Columnas
+                  </div>
+                  <button
+                    onClick={() => handleApplyPresetWidths("compact")}
+                    className="w-full text-left px-3 py-2 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg flex items-center justify-between transition-all cursor-pointer"
+                  >
+                    <span>Compacto (Achicar todo)</span>
+                    <span className="font-mono text-[10px] text-zinc-500">~80-100px</span>
+                  </button>
+                  <button
+                    onClick={() => handleApplyPresetWidths("normal")}
+                    className="w-full text-left px-3 py-2 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg flex items-center justify-between transition-all cursor-pointer"
+                  >
+                    <span>Normal (Estándar)</span>
+                    <span className="font-mono text-[10px] text-zinc-500">~150px</span>
+                  </button>
+                  <button
+                    onClick={() => handleApplyPresetWidths("wide")}
+                    className="w-full text-left px-3 py-2 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg flex items-center justify-between transition-all cursor-pointer"
+                  >
+                    <span>Amplio (Espacioso)</span>
+                    <span className="font-mono text-[10px] text-zinc-500">~240px</span>
+                  </button>
+                  <div className="my-1 border-t border-zinc-850" />
+                  <button
+                    onClick={handleResetAllWidths}
+                    className="w-full text-left px-3 py-2 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Restablecer anchos</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Toggle Contained Scroll with Sticky Header vs Full Page */}
+          <button
+            type="button"
+            id="btn-toggle-scroll-mode"
+            onClick={() => setIsContainedScroll(!isContainedScroll)}
+            className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg text-xs font-medium cursor-pointer transition-all shadow-xs ${
+              isContainedScroll 
+                ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/20" 
+                : "bg-zinc-800 border-zinc-700/85 text-zinc-400 hover:text-zinc-200"
+            }`}
+            title={isContainedScroll ? "Desactivar vista contenida (modo página completa)" : "Fijar cabecera y mantener barra de scroll visible"}
+          >
+            {isContainedScroll ? <Minimize2 className="w-3.5 h-3.5 text-indigo-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="hidden md:inline">
+              {isContainedScroll ? "Cabecera Fija" : "Expandido"}
+            </span>
+          </button>
           
           {/* Unified Export Button */}
           <div className="relative">
@@ -806,74 +1161,158 @@ export default function TableView({
         </form>
       )}
 
+      {/* Barra de desplazamiento lateral superior sincronizada */}
+      {canScrollHorizontal && (
+        <div 
+          className="bg-zinc-900 border border-zinc-800 rounded-xl p-2.5 flex items-center gap-3 shadow-xs select-none" 
+          id="top-horizontal-scroll-bar"
+        >
+          <div className="flex items-center gap-1.5 text-zinc-400 text-xs font-mono shrink-0">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline text-zinc-300 font-sans">Desplazamiento horizontal:</span>
+          </div>
+
+          {/* Quick scroll left button */}
+          <button
+            type="button"
+            onClick={() => handleScrollHorizontal("left")}
+            className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-lg transition-colors cursor-pointer shrink-0"
+            title="Desplazar tabla hacia la izquierda"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          {/* Synchronized top scroll track */}
+          <div
+            ref={topScrollContainerRef}
+            onScroll={handleTopScroll}
+            className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar h-3 bg-zinc-950 border border-zinc-800 rounded-full"
+            title="Arrastra o rueda esta barra para moverte horizontalmente por las columnas"
+          >
+            <div style={{ width: `${tableContentWidth}px`, height: "1px" }} />
+          </div>
+
+          {/* Quick scroll right button */}
+          <button
+            type="button"
+            onClick={() => handleScrollHorizontal("right")}
+            className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-lg transition-colors cursor-pointer shrink-0"
+            title="Desplazar tabla hacia la derecha"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Spreadsheet grid container */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-xs overflow-hidden" id="grid-spreadsheet-table-container">
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-left border-collapse table-auto" id="spreadsheet-dynamic-table">
-            <thead>
-              <tr className="bg-zinc-950/90 text-zinc-400 tracking-wider text-[10px] uppercase font-mono border-b border-zinc-800 font-bold">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-xs overflow-hidden flex flex-col" id="grid-spreadsheet-table-container">
+        <div 
+          ref={tableScrollContainerRef}
+          onScroll={handleBottomScroll}
+          className={`w-full overflow-x-auto overflow-y-auto custom-scrollbar ${
+            isContainedScroll ? "max-h-[calc(100vh-270px)]" : ""
+          }`}
+        >
+          <table 
+            className="text-left border-collapse table-fixed select-text" 
+            style={{ width: `${totalCalculatedWidth}px`, minWidth: `${totalCalculatedWidth}px` }}
+            id="spreadsheet-dynamic-table"
+          >
+            <thead className={`${isContainedScroll ? "sticky top-0 z-20 bg-zinc-950 shadow-md" : "bg-zinc-950/90"}`}>
+              <tr className="text-zinc-400 tracking-wider text-[10px] uppercase font-mono border-b border-zinc-800 font-bold">
                 {/* Index col */}
-                <th className="px-4 py-3.5 text-center w-14 border-r border-zinc-800">#</th>
+                <th 
+                  style={{ width: "56px", minWidth: "56px", maxWidth: "56px" }}
+                  className="px-2 py-3.5 text-center border-r border-zinc-800 bg-zinc-950/90 select-none"
+                >
+                  #
+                </th>
                 
                 {/* Schema columns */}
-                {table.columns.map((col, index) => (
-                  <th key={col.id} className="px-4 py-3 border-r border-zinc-800 min-w-44 select-none relative group/header">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5 cursor-pointer hover:text-zinc-100 transition-colors" onClick={() => handleSort(col.id)}>
-                        <span>{col.name}</span>
-                        <ArrowUpDown className="w-3 h-3 text-zinc-500 group-hover/header:text-zinc-300" />
-                        <span className="font-mono text-[8px] px-1 py-0.5 bg-zinc-900 text-zinc-500 rounded border border-zinc-800/80">
-                          {col.type}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center gap-1.5">
-                        {/* Left/Right Column movement controls */}
-                        {!readOnly && (
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleMoveColumn(index, "left")}
-                              disabled={index === 0}
-                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
-                              type="button"
-                              title="Mover columna a la izquierda"
-                            >
-                              ◀
-                            </button>
-                            <button
-                              onClick={() => handleMoveColumn(index, "right")}
-                              disabled={index === table.columns.length - 1}
-                              className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
-                              type="button"
-                              title="Mover columna a la derecha"
-                            >
-                              ▶
-                            </button>
-                          </div>
-                        )}
+                {table.columns.map((col, index) => {
+                  const colWidth = columnWidths[col.id] || defaultWidthForType(col.type);
+                  return (
+                    <th 
+                      key={col.id} 
+                      style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                      className="px-3 py-3 border-r border-zinc-800 select-none relative group/header overflow-hidden transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-1.5 pr-2 overflow-hidden">
+                        <div 
+                          className="flex items-center gap-1.5 cursor-pointer hover:text-zinc-100 transition-colors min-w-0 overflow-hidden" 
+                          onClick={() => handleSort(col.id)}
+                          title={`Ordenar por ${col.name} (Ancho: ${colWidth}px - Doble clic en borde para restablecer)`}
+                        >
+                          <span className="truncate font-sans font-medium text-zinc-300">{col.name}</span>
+                          <ArrowUpDown className="w-3 h-3 text-zinc-500 group-hover/header:text-zinc-300 shrink-0" />
+                          <span className="font-mono text-[8px] px-1 py-0.5 bg-zinc-900 text-zinc-500 rounded border border-zinc-800/80 shrink-0">
+                            {col.type}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center gap-1 shrink-0">
+                          {/* Left/Right Column movement controls */}
+                          {!readOnly && (
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => handleMoveColumn(index, "left")}
+                                disabled={index === 0}
+                                className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                                type="button"
+                                title="Mover columna a la izquierda"
+                              >
+                                ◀
+                              </button>
+                              <button
+                                onClick={() => handleMoveColumn(index, "right")}
+                                disabled={index === table.columns.length - 1}
+                                className="text-zinc-500 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors p-0.5 cursor-pointer text-[10px]"
+                                type="button"
+                                title="Mover columna a la derecha"
+                              >
+                                ▶
+                              </button>
+                            </div>
+                          )}
 
-                        {/* Only allow deleting column if it is not the very first column (for index safety) */}
-                        {index > 0 && !readOnly && isAdmin && (
-                          <button
-                            id={`btn-col-del-${col.id}`}
-                            onClick={() => {
-                              if (confirm(`¿Proceder a ejecutar DROP COLUMN en la columna '${col.name}'? Esto destruirá de forma irreversible todos los datos almacenados en este campo.`)) {
-                                onDeleteColumn(col.id);
-                              }
-                            }}
-                            className="opacity-0 group-hover/header:opacity-100 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 rounded cursor-pointer transition-all"
-                            title="DROP COLUMN (Borrar columna)"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
+                          {/* Only allow deleting column if it is not the very first column (for index safety) */}
+                          {index > 0 && !readOnly && isAdmin && (
+                            <button
+                              id={`btn-col-del-${col.id}`}
+                              onClick={() => {
+                                if (confirm(`¿Proceder a ejecutar DROP COLUMN en la columna '${col.name}'? Esto destruirá de forma irreversible todos los datos almacenados en este campo.`)) {
+                                  onDeleteColumn(col.id);
+                                }
+                              }}
+                              className="opacity-0 group-hover/header:opacity-100 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 rounded cursor-pointer transition-all"
+                              title="DROP COLUMN (Borrar columna)"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </th>
-                ))}
+
+                      {/* Resize Handle (Drag to shrink down to 50px or expand) */}
+                      <div
+                        onMouseDown={(e) => startResizing(col.id, e)}
+                        onDoubleClick={(e) => handleResetColumnWidth(col.id, e)}
+                        className="absolute top-0 right-0 w-3 h-full cursor-col-resize select-none flex items-center justify-center group/resizer hover:bg-indigo-500/25 active:bg-indigo-500/50 z-10 transition-colors"
+                        title="Arrastra para achicar o agrandar columna. Doble clic para restablecer ancho original."
+                      >
+                        <div className="w-0.5 h-3/5 bg-zinc-700/70 group-hover/resizer:bg-indigo-400 group-hover/resizer:w-1 group-hover/resizer:h-full rounded-full transition-all" />
+                      </div>
+                    </th>
+                  );
+                })}
                 
                 {/* Right side Actions col */}
-                <th className="px-4 py-3.5 text-center w-28 bg-zinc-950">Acciones</th>
+                <th 
+                  style={{ width: "100px", minWidth: "100px", maxWidth: "100px" }}
+                  className="px-3 py-3.5 text-center border-l border-zinc-800 bg-zinc-950/90 select-none"
+                >
+                  Acciones
+                </th>
               </tr>
             </thead>
             
@@ -885,27 +1324,56 @@ export default function TableView({
                   </td>
                 </tr>
               ) : (
-                sortedRows.map((row, idx) => (
-                  <tr key={row.id} className="hover:bg-zinc-900/35 transition-colors group/row" id={`row-tr-${row.id}`}>
-                    {/* Index */}
-                    <td className="px-4 py-3 text-center font-mono border-r border-zinc-800 text-zinc-500 font-bold bg-zinc-950/20">
-                      {idx + 1}
-                    </td>
+                sortedRows.map((row, idx) => {
+                  const isMarked = markedRowIds.has(row.id);
+                  return (
+                    <tr 
+                      key={row.id} 
+                      onClick={(e) => handleRowClick(row.id, e)}
+                      className={`transition-all duration-150 group/row cursor-pointer select-text ${
+                        isMarked 
+                          ? "bg-indigo-950/80 hover:bg-indigo-900/80 text-indigo-50 ring-1 ring-inset ring-indigo-500/60 shadow-inner" 
+                          : "hover:bg-zinc-900/50 text-zinc-300"
+                      }`} 
+                      id={`row-tr-${row.id}`}
+                      title={isMarked ? "Fila marcada para seguimiento (clic para desmarcar)" : "Clic para marcar y seguir fácilmente esta fila"}
+                    >
+                      {/* Index & Bookmark tracker cell */}
+                      <td 
+                        style={{ width: "56px", minWidth: "56px", maxWidth: "56px" }}
+                        className={`px-2 py-3 text-center font-mono border-r border-zinc-800 font-bold transition-colors select-none ${
+                          isMarked 
+                            ? "bg-indigo-900/70 text-indigo-200 border-l-4 border-l-indigo-400" 
+                            : "bg-zinc-950/20 text-zinc-500"
+                        }`}
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          {isMarked ? (
+                            <Bookmark className="w-3.5 h-3.5 text-indigo-400 fill-indigo-400 shrink-0 animate-in zoom-in-75 duration-150" />
+                          ) : (
+                            <span className="text-[11px]">{idx + 1}</span>
+                          )}
+                        </div>
+                      </td>
 
-                    {/* Columns values */}
-                    {table.columns.map((col) => {
-                      const value = row[col.id];
-                      const isEditing = editingCell?.rowId === row.id && editingCell?.colId === col.id;
+                      {/* Columns values */}
+                      {table.columns.map((col) => {
+                        const colWidth = columnWidths[col.id] || defaultWidthForType(col.type);
+                        const value = row[col.id];
+                        const isEditing = editingCell?.rowId === row.id && editingCell?.colId === col.id;
 
-                      return (
-                        <td
-                          key={col.id}
-                          onDoubleClick={() => handleStartInlineEdit(row, col.id, col.type)}
-                          className={`px-4 py-3 border-r border-zinc-800 text-zinc-300 font-sans whitespace-nowrap overflow-hidden text-ellipsis transition-all ${
-                            !readOnly && col.type !== "file" ? "cursor-text hover:bg-zinc-800/15" : ""
-                          }`}
-                          title={!readOnly && col.type !== "file" ? "Doble clic para editar directamente" : undefined}
-                        >
+                        return (
+                          <td
+                            key={col.id}
+                            style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                            onDoubleClick={() => handleStartInlineEdit(row, col.id, col.type)}
+                            className={`px-3 py-3 border-r border-zinc-800 font-sans whitespace-nowrap overflow-hidden text-ellipsis transition-all ${
+                              isMarked ? "border-zinc-800/80" : ""
+                            } ${
+                              !readOnly && col.type !== "file" ? "cursor-text hover:bg-zinc-800/20" : ""
+                            }`}
+                            title={!readOnly && col.type !== "file" ? "Doble clic para editar directamente" : undefined}
+                          >
                           {isEditing ? (
                             col.type === "boolean" ? (
                               <select
@@ -1042,11 +1510,18 @@ export default function TableView({
                       );
                     })}
 
-                    <td className="px-4 py-3 text-center bg-zinc-900/10" id={`row-actions-td-${row.id}`}>
-                      <div className="flex items-center justify-center gap-2">
+                    <td 
+                      style={{ width: "100px", minWidth: "100px", maxWidth: "100px" }}
+                      className="px-3 py-3 text-center bg-zinc-950/40 border-l border-zinc-800/80 select-none" 
+                      id={`row-actions-td-${row.id}`}
+                    >
+                      <div className="flex items-center justify-center gap-1.5">
                         <button
                           id={`btn-row-edit-${row.id}`}
-                          onClick={() => handleOpenRowForm(row)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenRowForm(row);
+                          }}
                           className="p-1 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 cursor-pointer transition-all"
                           title={readOnly ? "Ver Ficha de Registro" : "Ficha / Editar Fila"}
                         >
@@ -1055,7 +1530,8 @@ export default function TableView({
                         {!readOnly && (
                           <button
                             id={`btn-row-delete-${row.id}`}
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               if (confirm("¿Proceder a eliminar este registro físico? Esta operación restará 1 fila de la base de datos.")) {
                                 onDeleteRow(row.id);
                               }
@@ -1069,8 +1545,9 @@ export default function TableView({
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
+                );
+              })
+            )}
             </tbody>
           </table>
         </div>
