@@ -46,6 +46,7 @@ const MCP_TOOLS: McpTool[] = [
         searchTerm: { type: "string", description: "Filtro de búsqueda de texto global opcional aplicado a todas las columnas." },
         filters: { 
           type: "object", 
+          additionalProperties: true,
           description: "Filtros por campo/columna (ej: {'col_status': 'Completada', 'DNI': '12345678'} o {'col_fecha': {'operator': 'gte', 'value': '2026-01-01'}}). Permite filtrar por ID o nombre de columna." 
         },
         sortBy: { type: "string", description: "ID o nombre de la columna para ordenar." },
@@ -63,6 +64,7 @@ const MCP_TOOLS: McpTool[] = [
         tableId: { type: "string", description: "ID de la tabla donde buscar." },
         filters: { 
           type: "object", 
+          additionalProperties: true,
           description: "Objeto de filtros por campo (clave: ID o nombre de columna; valor: valor exacto, texto parcial, o un objeto {'operator': 'equals'|'contains'|'gt'|'gte'|'lt'|'lte'|'ne'|'in', 'value': ...})." 
         },
         limit: { type: "number", description: "Límite de filas a retornar (por defecto 20)." },
@@ -121,7 +123,11 @@ const MCP_TOOLS: McpTool[] = [
       type: "object",
       properties: {
         tableId: { type: "string", description: "ID de la tabla donde insertar." },
-        rowData: { type: "object", description: "Objeto clave-valor con los datos de las columnas de la fila (los IDs de columna como claves)." }
+        rowData: { 
+          type: "object", 
+          additionalProperties: true,
+          description: "Objeto clave-valor con los datos de las columnas de la fila (IDs de columna o nombre como claves). Ej: { \"col_1780886568440\": 13102342, \"col_name\": \"PEREZ JUAN\" }." 
+        }
       },
       required: ["tableId", "rowData"]
     }
@@ -134,7 +140,11 @@ const MCP_TOOLS: McpTool[] = [
       properties: {
         tableId: { type: "string", description: "ID de la tabla." },
         rowId: { type: "string", description: "ID único del registro a modificar (ej: row_p1)." },
-        rowData: { type: "object", description: "Objeto clave-valor con los campos modificados." }
+        rowData: { 
+          type: "object", 
+          additionalProperties: true,
+          description: "Objeto clave-valor con los campos modificados (IDs de columna o nombre como claves)." 
+        }
       },
       required: ["tableId", "rowId", "rowData"]
     }
@@ -166,7 +176,11 @@ const MCP_TOOLS: McpTool[] = [
       type: "object",
       properties: {
         tableId: { type: "string", description: "ID de la tabla donde realizar el upsert del paciente (consultorios, cirugías, hemodinamia, etc.)." },
-        rowData: { type: "object", description: "Objeto clave-valor con los datos de las columnas del paciente (los IDs de columna o nombres como claves, incluyendo el DNI y la fecha de atención)." }
+        rowData: { 
+          type: "object", 
+          additionalProperties: true,
+          description: "Objeto clave-valor con los datos del paciente (IDs de columna o nombres como claves, incluyendo DNI y fecha de atención). Ej: { \"col_1780886568440\": 13102342, \"col_name\": \"PEREZ JUAN\", \"col_1780886631488\": \"PAMI\" }." 
+        }
       },
       required: ["tableId", "rowData"]
     }
@@ -569,17 +583,38 @@ export function setupMcp(
 
       case "insert_row": {
         const { tableId, rowData } = args;
-        const table = db.tables.find(t => t.id === tableId);
+        if (!rowData || typeof rowData !== "object" || Array.isArray(rowData) || Object.keys(rowData).length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: El parámetro 'rowData' llegó vacío o no es un objeto válido. No se insertó ninguna fila para prevenir registros vacíos o corruptos en la base de datos."
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === (tableId || "").toLowerCase());
         if (!table) {
-          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
         }
 
         const newRowId = "row_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
         const newRow: Row = { id: newRowId };
 
-        // Copiar y validar valores según columnas
+        // Copiar y validar valores según columnas (soporta IDs de columna o nombres legibles)
         table.columns.forEach(col => {
-          const val = rowData[col.id];
+          let val = rowData[col.id];
+          if (val === undefined && rowData[col.name] !== undefined) {
+            val = rowData[col.name];
+          }
+          if (val === undefined) {
+            const cleanName = col.name.trim().toLowerCase();
+            const matchedKey = Object.keys(rowData).find(k => k.trim().toLowerCase() === cleanName);
+            if (matchedKey) val = rowData[matchedKey];
+          }
+
           if (val === undefined || val === null) {
             newRow[col.id] = col.type === "boolean" ? false : null;
           } else if (col.type === "number") {
@@ -600,7 +635,7 @@ export function setupMcp(
           timestamp: new Date().toISOString(),
           user: "Agente MCP AI",
           action: "CREATE",
-          tableId,
+          tableId: table.id,
           tableName: table.name,
           details: `Agente insertó un nuevo registro vía MCP Tool (ID: ${newRowId}).`
         });
@@ -623,9 +658,21 @@ export function setupMcp(
 
       case "update_row": {
         const { tableId, rowId, rowData } = args;
-        const table = db.tables.find(t => t.id === tableId);
+        if (!rowData || typeof rowData !== "object" || Array.isArray(rowData) || Object.keys(rowData).length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: El parámetro 'rowData' llegó vacío o no es un objeto válido. No se modificó ningún campo."
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === (tableId || "").toLowerCase());
         if (!table) {
-          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
         }
 
         const row = table.rows?.find(r => r.id === rowId);
@@ -633,10 +680,19 @@ export function setupMcp(
           throw new Error(`Registro con ID '${rowId}' no encontrado en la tabla '${table.name}'.`);
         }
 
-        // Actualización selectiva
+        // Actualización selectiva (soporta IDs de columna o nombres legibles)
         table.columns.forEach(col => {
-          if (rowData[col.id] !== undefined) {
-            const val = rowData[col.id];
+          let val = rowData[col.id];
+          if (val === undefined && rowData[col.name] !== undefined) {
+            val = rowData[col.name];
+          }
+          if (val === undefined) {
+            const cleanName = col.name.trim().toLowerCase();
+            const matchedKey = Object.keys(rowData).find(k => k.trim().toLowerCase() === cleanName);
+            if (matchedKey) val = rowData[matchedKey];
+          }
+
+          if (val !== undefined) {
             if (val === null) {
               row[col.id] = col.type === "boolean" ? false : null;
             } else if (col.type === "number") {
@@ -654,7 +710,7 @@ export function setupMcp(
           timestamp: new Date().toISOString(),
           user: "Agente MCP AI",
           action: "UPDATE",
-          tableId,
+          tableId: table.id,
           tableName: table.name,
           details: `Agente modificó el registro '${rowId}' vía MCP Tool.`
         });
@@ -766,9 +822,21 @@ export function setupMcp(
 
       case "upsert_patient": {
         const { tableId, rowData } = args;
-        const table = db.tables.find(t => t.id === tableId);
+        if (!rowData || typeof rowData !== "object" || Array.isArray(rowData) || Object.keys(rowData).length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: El parámetro 'rowData' llegó vacío o no es un objeto válido. No se realizó ninguna inserción ni actualización."
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const table = db.tables.find(t => t.id === tableId || t.name.toLowerCase() === (tableId || "").toLowerCase());
         if (!table) {
-          throw new Error(`Tabla con ID '${tableId}' no encontrada.`);
+          throw new Error(`Tabla con ID o nombre '${tableId}' no encontrada.`);
         }
 
         // Buscar columna DNI de manera flexible
@@ -801,6 +869,19 @@ export function setupMcp(
           if (keyWithDni) {
             inputDniValue = rowData[keyWithDni];
           }
+        }
+
+        // Validación defensiva estricta: upsert_patient requiere obligatoriamente identificar el paciente por DNI
+        if (inputDniValue === null || inputDniValue === undefined || String(inputDniValue).trim() === "") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: No se encontró un valor válido para DNI o Documento en 'rowData'. La herramienta 'upsert_patient' requiere obligatoriamente el DNI para buscar coincidencias o registrar al paciente. Claves recibidas: ${Object.keys(rowData).join(", ")}.`
+              }
+            ],
+            isError: true
+          };
         }
 
         // Buscar si ya existe una fila con ese DNI
@@ -847,6 +928,11 @@ export function setupMcp(
               let incomingVal = rowData[col.id];
               if (incomingVal === undefined && rowData[col.name] !== undefined) {
                 incomingVal = rowData[col.name];
+              }
+              if (incomingVal === undefined) {
+                const cleanName = col.name.trim().toLowerCase();
+                const matchedKey = Object.keys(rowData).find(k => k.trim().toLowerCase() === cleanName);
+                if (matchedKey) incomingVal = rowData[matchedKey];
               }
 
               if (isStatusCol) {
@@ -912,6 +998,11 @@ export function setupMcp(
             let incomingVal = rowData[col.id];
             if (incomingVal === undefined && rowData[col.name] !== undefined) {
               incomingVal = rowData[col.name];
+            }
+            if (incomingVal === undefined) {
+              const cleanName = col.name.trim().toLowerCase();
+              const matchedKey = Object.keys(rowData).find(k => k.trim().toLowerCase() === cleanName);
+              if (matchedKey) incomingVal = rowData[matchedKey];
             }
 
             if (incomingVal === undefined || incomingVal === null) {
